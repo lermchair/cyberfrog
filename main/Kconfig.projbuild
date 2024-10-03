@@ -1,0 +1,8 @@
+menu "Cyberfrog config"
+	    orsource "$IDF_PATH/examples/common_components/env_caps/$IDF_TARGET/Kconfig.env_caps"
+
+		config EFUSE_RSA_SIG
+			bool "Use fast RSA signature (requires efuse)"
+			default n
+
+endmenu
