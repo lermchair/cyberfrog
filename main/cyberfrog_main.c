@@ -25,7 +25,7 @@
 #include <stdio.h>
 #include <string.h>
 
-#define DEBOUNCE_TIME_US 1000000 // 1s debounce time
+#define DEBOUNCE_TIME_US 600000 // 600ms debounce time
 #define STORAGE_NAMESPACE "storage"
 
 static _Atomic uint_least32_t nonce = 0;
@@ -39,10 +39,14 @@ static volatile bool gpio_interrupt_flag = false;
 static volatile int64_t last_interrupt_time = 0;
 
 void IRAM_ATTR gpio_isr_handler(void *arg) {
-  BaseType_t xHigherPriorityTaskWoken = pdFALSE;
-  xSemaphoreGiveFromISR(xSemaphore, &xHigherPriorityTaskWoken);
-  if (xHigherPriorityTaskWoken == pdTRUE) {
-    portYIELD_FROM_ISR();
+  int64_t current_time = esp_timer_get_time();
+  if (current_time - last_interrupt_time > DEBOUNCE_TIME_US) {
+    last_interrupt_time = current_time;
+    BaseType_t xHigherPriorityTaskWoken = pdFALSE;
+    xSemaphoreGiveFromISR(xSemaphore, &xHigherPriorityTaskWoken);
+    if (xHigherPriorityTaskWoken == pdTRUE) {
+      portYIELD_FROM_ISR();
+    }
   }
 }
 
@@ -327,6 +331,8 @@ void app_main(void) {
     err = nvs_flash_init();
   }
   ESP_ERROR_CHECK(err);
+
+  esp_timer_init(); // Initialize the esp_timer
 
 #ifdef CONFIG_EFUSE_RSA_SIG
   printf("Oopsie, not implemented\n");
