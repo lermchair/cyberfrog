@@ -12,3 +12,4 @@ struct rsa_config {
 struct rsa_config *generate_keypair(void);
 unsigned char *rsa_sign(struct rsa_config *, unsigned char *, unsigned char *);
 void rsa_cleanup(struct rsa_config *);
+int rsa_init(unsigned char *pem_key);

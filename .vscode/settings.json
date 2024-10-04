@@ -58,7 +58,18 @@
     "optional": "c",
     "system_error": "c",
     "variant": "c",
-    "compare": "c"
+    "compare": "c",
+    "cstdlib": "c",
+    "charconv": "c",
+    "chrono": "c",
+    "format": "c",
+    "ratio": "c",
+    "functional": "c",
+    "regex": "c",
+    "tuple": "c",
+    "type_traits": "c",
+    "utility": "c",
+    "pk.h": "c"
   },
   "C_Cpp.errorSquiggles": "enabled"
 }
