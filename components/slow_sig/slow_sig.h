@@ -1,15 +1,15 @@
 #pragma once
 #include "mbedtls/ctr_drbg.h"
+#include <mbedtls/pk.h>
 #include <mbedtls/rsa.h>
 #include <mbedtls/sha256.h>
 
-struct rsa_config {
-  mbedtls_rsa_context *rsa;
-  mbedtls_ctr_drbg_context *ctr_drbg;
-  mbedtls_entropy_context *entropy;
-};
-
-struct rsa_config *generate_keypair(void);
-unsigned char *rsa_sign(struct rsa_config *, unsigned char *, unsigned char *);
-void rsa_cleanup(struct rsa_config *);
-int rsa_init(unsigned char *pem_key);
+int rsa_init(mbedtls_pk_context *key, mbedtls_ctr_drbg_context *ctr_drbg,
+             mbedtls_entropy_context *entropy);
+unsigned char *generate_rsa_pem_key(mbedtls_pk_context *key);
+int load_rsa_key(mbedtls_pk_context *key, unsigned char *pem_key,
+                 size_t pem_key_size);
+char *rsa_sign_to_base64(mbedtls_pk_context *key,
+                         mbedtls_ctr_drbg_context *ctr_drbg,
+                         unsigned char *message);
+// *); void rsa_cleanup(struct rsa_config *);
