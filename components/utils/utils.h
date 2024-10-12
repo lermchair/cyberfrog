@@ -4,6 +4,7 @@
 #include <st25dv.h>
 #include <st25dv_ndef.h>
 #include <stdint.h>
+#include <mbedtls/pk.h>
 
 typedef esp_err_t (*nvs_item_exists_callback)(nvs_handle_t handle,
                                               const char *key, void *output);
@@ -28,3 +29,5 @@ void uint32_to_char(uint32_t num, unsigned char *output);
 esp_err_t st25dv_ndef_write_content_patched(st25dv_config st25dv,
                                             uint16_t *address, bool mb, bool me,
                                             const std25dv_ndef_record record);
+
+int get_public_key(mbedtls_pk_context *pk,  char *output, size_t output_size);

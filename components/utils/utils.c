@@ -1,4 +1,6 @@
 #include "utils.h"
+#include <mbedtls/pk.h>
+#include "mbedtls/base64.h"
 #include <string.h>
 
 void signature_to_hex(const unsigned char *signature, size_t sig_len,
@@ -295,4 +297,46 @@ esp_err_t st25dv_ndef_write_content_patched(st25dv_config st25dv,
 
   free(record_data);
   return ESP_OK;
+}
+
+int get_public_key(mbedtls_pk_context *pk, char *output, size_t output_size)
+{
+    int ret;
+        unsigned char der_buf[1024];
+        size_t der_len = 0;
+        unsigned char base64_buf[1400];  // Increased buffer size for base64 encoding
+        size_t base64_len = 0;
+        const char *begin_public_key = "-----BEGIN PUBLIC KEY-----\n";
+        const char *end_public_key = "-----END PUBLIC KEY-----\n";
+        size_t total_len;
+
+        // Write the public key to DER format
+        ret = mbedtls_pk_write_pubkey_der(pk, der_buf, sizeof(der_buf));
+        if (ret < 0) {
+            return ret;
+        }
+        der_len = ret;
+
+        // Base64 encode the DER data
+        ret = mbedtls_base64_encode(base64_buf, sizeof(base64_buf), &base64_len,
+                                    der_buf + sizeof(der_buf) - der_len, der_len);
+        if (ret != 0) {
+            return ret;
+        }
+
+        // Calculate total length needed for PEM format
+        total_len = strlen(begin_public_key) + base64_len + strlen(end_public_key) + 1;
+
+        // Check if output buffer is large enough
+        if (output_size < total_len) {
+            return -1;  // Output buffer too small
+        }
+
+        // Construct PEM string
+        strcpy(output, begin_public_key);
+        strncat(output, (char *)base64_buf, base64_len);
+        strcat(output, "\n");  // Add a newline after base64 data
+        strcat(output, end_public_key);
+
+        return strlen(output);
 }

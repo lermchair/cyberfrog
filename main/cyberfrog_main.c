@@ -26,6 +26,9 @@ static mbedtls_pk_context key;
 static mbedtls_ctr_drbg_context ctr_drbg;
 static mbedtls_entropy_context entropy;
 
+static char public_key[1024];
+size_t public_key_len;
+
 static _Atomic uint_least32_t nonce = 0;
 
 static SemaphoreHandle_t xSemaphore = NULL;
@@ -226,6 +229,14 @@ void app_main(void) {
   gpio_install_isr_service(0);
   printf("Installed GPIO ISR for GPIO %d\n", NFC_INT_PIN);
 
+  public_key_len = get_public_key(&key, public_key, sizeof(public_key));
+  if (public_key_len < 0) {
+      printf("Unable to get public key\n");
+      return;
+  } else {
+      printf("Using public key: %s\n", public_key);
+  }
+
   // get the nonce
   uint32_t nonce = get_nonce();
   printf("Got nonce: %lu\n", nonce);
@@ -237,18 +248,6 @@ void app_main(void) {
     return;
   }
   printf("Signature: %s\n", b64_signature);
-
-  bool session_opened = false;
-  err = st25dv_is_session_opened(ST25DV_SYSTEM_ADDRESS, &session_opened);
-  if (err != ESP_OK) {
-    printf("Failed to check session status: %s\n", esp_err_to_name(err));
-    return;
-  }
-  if (!session_opened) {
-    printf("Session is not opened\n");
-    return;
-  }
-  printf("Session is confirmed to be opened\n");
 
   uint8_t *blank = malloc(256);
   memset(blank, 0x00, 256);
@@ -264,7 +263,6 @@ void app_main(void) {
   uint16_t address = CC_FILE_ADDR + CCFILE_LENGTH;
 
   char *url = format_url_safely(b64_signature);
-  // char *url = "https://zupass.org";
 
   char record_type[] = "U";             // URI record type
   char record_payload[strlen(url) + 1]; // +1 for URI identifier
