@@ -6,7 +6,7 @@
 
 int rsa_init(mbedtls_pk_context *key, mbedtls_ctr_drbg_context *ctr_drbg,
              mbedtls_entropy_context *entropy);
-unsigned char *generate_rsa_pem_key(mbedtls_pk_context *key);
+unsigned char *generate_rsa_pem_key(mbedtls_pk_context *key, mbedtls_ctr_drbg_context *ctr_drbg);
 int load_rsa_key(mbedtls_pk_context *key, unsigned char *pem_key,
                  size_t pem_key_size);
 char *rsa_sign_to_base64(mbedtls_pk_context *key,

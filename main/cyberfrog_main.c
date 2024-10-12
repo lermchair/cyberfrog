@@ -165,7 +165,7 @@ void app_main(void) {
 
   if (saved_size == 0) {
     printf("No saved key found, generating new key\n");
-    unsigned char *pem_key = generate_rsa_pem_key(&key);
+    unsigned char *pem_key = generate_rsa_pem_key(&key, &ctr_drbg);
     if (pem_key == NULL) {
       printf("Failed to generate RSA key\n");
       return;

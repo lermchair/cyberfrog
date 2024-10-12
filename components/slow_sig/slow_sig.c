@@ -22,8 +22,8 @@ int rsa_init(mbedtls_pk_context *key, mbedtls_ctr_drbg_context *ctr_drbg,
   return 0;
 }
 
-unsigned char *generate_rsa_pem_key(mbedtls_pk_context *key) {
-  esp_err_t err;
+unsigned char *generate_rsa_pem_key(mbedtls_pk_context *key,
+                                    mbedtls_ctr_drbg_context *ctr_drbg) {
   int mbedtls_ret;
   unsigned char *pem_key = NULL;
   size_t pem_key_size = 1680;
@@ -35,16 +35,26 @@ unsigned char *generate_rsa_pem_key(mbedtls_pk_context *key) {
     return NULL;
   }
   mbedtls_ret =
-      mbedtls_pk_setup(&key, mbedtls_pk_info_from_type(MBEDTLS_PK_RSA));
+      mbedtls_pk_setup(key, mbedtls_pk_info_from_type(MBEDTLS_PK_RSA));
   if (mbedtls_ret != 0) {
     printf("mbedtls_pk_setup returned -0x%04xn=\n", -mbedtls_ret);
     free(pem_key);
     return NULL;
+  };
+
+  printf("Generating RSA key pair...\n");
+  mbedtls_ret = mbedtls_rsa_gen_key(
+      mbedtls_pk_rsa(*key), mbedtls_ctr_drbg_random, ctr_drbg, 2048, 65537);
+  if (mbedtls_ret != 0) {
+    printf("mbedtls_rsa_gen_key returned -0x%04x", -mbedtls_ret);
+    free(pem_key);
+    return NULL;
   }
+
   printf("RSA key pair generated successfully.\n");
 
   memset(pem_key, 0, pem_key_size);
-  mbedtls_ret = mbedtls_pk_write_key_pem(&key, pem_key, pem_key_size);
+  mbedtls_ret = mbedtls_pk_write_key_pem(key, pem_key, pem_key_size);
   if (mbedtls_ret != 0) {
     printf("mbedtls_pk_write_key_pem returned -0x%04x\n", -mbedtls_ret);
     free(pem_key);
