@@ -80,7 +80,7 @@ esp_err_t configure_and_set_gpio_high(int pin) {
     return ret;
   }
 
-  printf("GPIO set to high\n");
+  printf("GPIO %u set to high\n", pin);
   return ESP_OK;
 }
 

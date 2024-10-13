@@ -14,6 +14,7 @@ esp_err_t st25dv_ndef_write_ccfile(uint64_t ccfile) {
   return st25dv_write(ST25DV_USER_ADDRESS, 0x00, ccbyte, sizeof(ccfile));
 }
 
+// TODO: clean up
 esp_err_t st25dv_ndef_write_content(st25dv_config st25dv, uint16_t *address,
                                     bool mb, bool me,
                                     const std25dv_ndef_record record) {

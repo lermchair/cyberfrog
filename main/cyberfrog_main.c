@@ -6,6 +6,7 @@
 #include "utils.h"
 #include <driver/gpio.h>
 #include <driver/i2c.h>
+#include <neopixel.h>
 #include <nvs.h>
 #include <nvs_flash.h>
 #include <st25dv.h>
@@ -19,6 +20,8 @@
 #define SDA_PIN 9
 #define SCL_PIN 8
 #define NFC_INT_PIN 4
+#define LED_PIN 6
+#define LED_EN 7
 #define DEBOUNCE_TIME_US 700000 // 700ms debounce time
 #define CC_FILE_ADDR 0x0000
 
@@ -114,6 +117,8 @@ void IRAM_ATTR gpio_isr_handler(void *arg) {
     nfc_operation_pending = true;
   }
 }
+
+#define ARRAY_SIZE(x) (sizeof(x) / sizeof(x[0]))
 
 void app_main(void) {
   esp_err_t err = nvs_flash_init();
@@ -243,6 +248,27 @@ void app_main(void) {
   }
   memcpy(public_key_copy, public_key, public_key_len);
   public_key_copy[public_key_len] = '\0';
+
+  configure_and_set_gpio_high(LED_EN);
+
+  tNeopixelContext neopixel = neopixel_Init(6, LED_PIN);
+
+  if (neopixel == NULL) {
+    printf("Failed to initialize Neopixel\n");
+    return;
+  }
+
+  printf("Starting neopixels...\n");
+  for (int i = 0; i < 10 * 6; ++i) {
+    tNeopixel pixel[] = {
+        {(i) % 6, NP_RGB(0, 0, 0)}, {(i + 5) % 6, NP_RGB(0, 50, 0)}, /* green */
+    };
+    neopixel_SetPixel(neopixel, pixel, ARRAY_SIZE(pixel));
+    vTaskDelay(pdMS_TO_TICKS(200));
+  }
+
+  neopixel_Deinit(neopixel);
+  gpio_set_level(LED_EN, 0);
 
   while (1) {
     if (nfc_operation_pending) {
