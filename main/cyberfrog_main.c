@@ -3,6 +3,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
+#include "mbedtls/base64.h"
 #include "slow_sig.h"
 #include "utils.h"
 #include <driver/gpio.h>
@@ -21,6 +22,7 @@
 #define SCL_PIN 8
 #define NFC_INT_PIN 4
 #define DEBOUNCE_TIME_US 700000 // 700ms debounce time
+#define CC_FILE_ADDR 0x0000
 
 static mbedtls_pk_context key;
 static mbedtls_ctr_drbg_context ctr_drbg;
@@ -32,6 +34,12 @@ size_t public_key_len;
 static _Atomic uint_least32_t nonce = 0;
 
 static SemaphoreHandle_t xSemaphore = NULL;
+static volatile bool nfc_operation_pending = false;
+
+typedef struct {
+  st25dv_config *st25dv_cfg;
+  char *public_key_pem;
+} nfc_task_params;
 
 uint32_t get_nonce() {
   uint32_t nonce_value = atomic_fetch_add(&nonce, 1);
@@ -101,19 +109,140 @@ void IRAM_ATTR gpio_isr_handler(void *arg);
 static volatile bool gpio_interrupt_flag = false;
 static volatile int64_t last_interrupt_time = 0;
 
+// void IRAM_ATTR gpio_isr_handler(void *arg) {
+//   int64_t current_time = esp_timer_get_time();
+//   if (current_time - last_interrupt_time > DEBOUNCE_TIME_US) {
+//     last_interrupt_time = current_time;
+//     BaseType_t xHigherPriorityTaskWoken = pdFALSE;
+//     xSemaphoreGiveFromISR(xSemaphore, &xHigherPriorityTaskWoken);
+//     if (xHigherPriorityTaskWoken == pdTRUE) {
+//       portYIELD_FROM_ISR();
+//     }
+//   }
+// }
+
 void IRAM_ATTR gpio_isr_handler(void *arg) {
   int64_t current_time = esp_timer_get_time();
+  static int64_t last_interrupt_time = 0;
   if (current_time - last_interrupt_time > DEBOUNCE_TIME_US) {
     last_interrupt_time = current_time;
-    BaseType_t xHigherPriorityTaskWoken = pdFALSE;
-    xSemaphoreGiveFromISR(xSemaphore, &xHigherPriorityTaskWoken);
-    if (xHigherPriorityTaskWoken == pdTRUE) {
-      portYIELD_FROM_ISR();
-    }
+    nfc_operation_pending = true;
   }
 }
 
-#define CC_FILE_ADDR 0x0000
+void nfc_scan_task(void *pvParameter) {
+  nfc_task_params *params = (nfc_task_params *)pvParameter;
+  st25dv_config *config = params->st25dv_cfg;
+  char *public_key_pem = params->public_key_pem;
+
+  // Parse the public key
+  mbedtls_pk_context pub_key;
+  mbedtls_pk_init(&pub_key);
+  int ret = mbedtls_pk_parse_public_key(&pub_key,
+                                        (const unsigned char *)public_key_pem,
+                                        strlen(public_key_pem) + 1);
+  if (ret != 0) {
+    printf("Failed to parse public key: -0x%04x\n", -ret);
+    return;
+  }
+
+  while (1) {
+    if (xSemaphoreTake(xSemaphore, portMAX_DELAY) == pdTRUE) {
+      printf("NFC scan task detected\n");
+      uint32_t current_nonce = atomic_load(&nonce);
+
+      // get the nonce
+      uint32_t new_nonce = get_nonce();
+      printf("Got nonce: %lu\n", new_nonce);
+      bool success = false;
+      unsigned char message[sizeof(uint32_t)];
+      uint32_to_char(new_nonce, message);
+      char *b64_signature =
+          rsa_sign_to_base64(&key, &ctr_drbg, message, sizeof(message));
+      if (b64_signature == NULL) {
+        printf("Failed to sign message\n");
+        // Roll back the nonce
+        atomic_store(&nonce, current_nonce);
+        continue;
+      }
+      printf("Signature: %s\n", b64_signature);
+
+      size_t decoded_len;
+      unsigned char decoded_signature[MBEDTLS_MPI_MAX_SIZE];
+      mbedtls_base64_decode(decoded_signature, sizeof(decoded_signature),
+                            &decoded_len, (const unsigned char *)b64_signature,
+                            strlen(b64_signature));
+
+      int verify_result = rsa_verify_signature(
+          &pub_key, message, sizeof(message), decoded_signature, decoded_len);
+      if (verify_result == 0) {
+        printf("Signature verification successful\n");
+        success = true;
+      } else {
+        printf("Signature verification failed\n");
+        atomic_store(&nonce, current_nonce);
+        free(b64_signature);
+        continue;
+      }
+
+      uint8_t *blank = malloc(256);
+      memset(blank, 0x00, 256);
+      st25dv_write(ST25DV_USER_ADDRESS, 0x00, blank, 256);
+      free(blank);
+
+      printf("Clearing from 0x00 to 0x200\n");
+      vTaskDelay(100 / portTICK_RATE_MS);
+
+      st25dv_ndef_write_ccfile(0x00040000010040E2);
+      printf("Writing CC File\n");
+      vTaskDelay(100 / portTICK_RATE_MS);
+      uint16_t address = CC_FILE_ADDR + CCFILE_LENGTH;
+
+      char *url = format_url_safely(b64_signature);
+
+      char record_type[] = "U";             // URI record type
+      char record_payload[strlen(url) + 1]; // +1 for URI identifier
+
+      record_payload[0] = 0x04;            // URI identifier for "https://"
+      strcpy(record_payload + 1, url + 8); // Copy URL without "https://"
+
+      std25dv_ndef_record url_record = {.tnf = NDEF_ST25DV_TNF_WELL_KNOWN,
+                                        .type = record_type,
+                                        .payload = record_payload};
+
+      esp_err_t err =
+          st25dv_ndef_write_content(*config, &address, true, true, url_record);
+
+      if (err != ESP_OK) {
+        printf("Failed to write chunked NDEF records: %s\n",
+               esp_err_to_name(err));
+        atomic_store(&nonce, current_nonce);
+        continue;
+      } else {
+        printf("NDEF URI written in chunks.\n");
+      }
+
+      free(url);
+      free(b64_signature);
+
+      nvs_handle_t nvs_handle;
+      esp_err_t nvs_err = nvs_open("storage", NVS_READWRITE, &nvs_handle);
+      if (nvs_err == ESP_OK) {
+        if (!success) {
+          nvs_err = nvs_set_u32(nvs_handle, "nonce", current_nonce);
+          if (nvs_err != ESP_OK) {
+            printf("Error (%s) rolling back nonce in NVS!\n",
+                   esp_err_to_name(nvs_err));
+          }
+        }
+        nvs_commit(nvs_handle);
+        nvs_close(nvs_handle);
+      } else {
+        printf("Error (%s) opening NVS handle!\n", esp_err_to_name(nvs_err));
+      }
+    }
+  }
+}
 
 void app_main(void) {
   esp_err_t err = nvs_flash_init();
@@ -227,66 +356,82 @@ void app_main(void) {
   };
   gpio_config(&nfc_int_config);
   gpio_install_isr_service(0);
+  gpio_isr_handler_add(NFC_INT_PIN, gpio_isr_handler, NULL);
   printf("Installed GPIO ISR for GPIO %d\n", NFC_INT_PIN);
 
   public_key_len = get_public_key(&key, public_key, sizeof(public_key));
   if (public_key_len < 0) {
-      printf("Unable to get public key\n");
-      return;
+    printf("Unable to get public key\n");
+    return;
   } else {
-      printf("Using public key: %s\n", public_key);
+    printf("Using public key:\n %s\n", public_key);
   }
 
-  // get the nonce
-  uint32_t nonce = get_nonce();
-  printf("Got nonce: %lu\n", nonce);
-  unsigned char message[sizeof(uint32_t)];
-  uint32_to_char(nonce, message);
-  char *b64_signature = rsa_sign_to_base64(&key, &ctr_drbg, message);
-  if (b64_signature == NULL) {
-    printf("Failed to sign message\n");
+  char *public_key_copy = malloc(public_key_len + 1);
+  if (public_key_copy == NULL) {
+    printf("Failed to allocate memory for public key\n");
     return;
   }
-  printf("Signature: %s\n", b64_signature);
+  memcpy(public_key_copy, public_key, public_key_len);
+  public_key_copy[public_key_len] = '\0';
 
-  uint8_t *blank = malloc(256);
-  memset(blank, 0x00, 256);
-  st25dv_write(ST25DV_USER_ADDRESS, 0x00, blank, 256);
-  free(blank);
+  while (1) {
+    if (nfc_operation_pending) {
+      nfc_operation_pending = false; // Reset the flag
 
-  printf("Clearing from 0x00 to 0x200\n");
-  vTaskDelay(100 / portTICK_RATE_MS);
+      // Perform NFC operations here
+      uint32_t new_nonce = get_nonce();
+      printf("Got nonce: %lu\n", new_nonce);
 
-  st25dv_ndef_write_ccfile(0x00040000010040E2);
-  printf("Writing CC File\n");
-  vTaskDelay(100 / portTICK_RATE_MS);
-  uint16_t address = CC_FILE_ADDR + CCFILE_LENGTH;
+      unsigned char message[sizeof(uint32_t)];
+      uint32_to_char(new_nonce, message);
+      char *b64_signature =
+          rsa_sign_to_base64(&key, &ctr_drbg, message, sizeof(message));
+      if (b64_signature == NULL) {
+        printf("Failed to sign message\n");
+        continue;
+      }
 
-  char *url = format_url_safely(b64_signature);
+      // Clear NFC tag
+      uint8_t *blank = malloc(256);
+      memset(blank, 0x00, 256);
+      st25dv_write(ST25DV_USER_ADDRESS, 0x00, blank, 256);
+      free(blank);
 
-  char record_type[] = "U";             // URI record type
-  char record_payload[strlen(url) + 1]; // +1 for URI identifier
+      vTaskDelay(pdMS_TO_TICKS(100));
 
-  record_payload[0] = 0x04;            // URI identifier for "https://"
-  strcpy(record_payload + 1, url + 8); // Copy URL without "https://"
+      // Write CC file
+      st25dv_ndef_write_ccfile(0x00040000010040E2);
 
-  std25dv_ndef_record url_record = {.tnf = NDEF_ST25DV_TNF_WELL_KNOWN,
-                                    .type = record_type,
-                                    .payload = record_payload};
+      vTaskDelay(pdMS_TO_TICKS(100));
 
-  err = st25dv_ndef_write_content_patched(st25dv_config, &address, true, true,
-                                          url_record);
+      // Prepare NDEF record
+      uint16_t address = CC_FILE_ADDR + CCFILE_LENGTH;
+      char *url = format_url_safely(b64_signature);
+      char record_type[] = "U";
+      char record_payload[strlen(url) + 1];
+      record_payload[0] = 0x04;
+      strcpy(record_payload + 1, url + 8);
 
-  if (err != ESP_OK) {
-    printf("Failed to write chunked NDEF records: %s\n", esp_err_to_name(err));
-    free(url);
-    free(b64_signature);
-    return;
+      std25dv_ndef_record url_record = {.tnf = NDEF_ST25DV_TNF_WELL_KNOWN,
+                                        .type = record_type,
+                                        .payload = record_payload};
+
+      // Write NDEF record
+      esp_err_t err = st25dv_ndef_write_content(st25dv_config, &address, true,
+                                                true, url_record);
+      if (err != ESP_OK) {
+        printf("Failed to write NDEF record: %s\n", esp_err_to_name(err));
+      } else {
+        printf("NDEF record written successfully\n");
+      }
+
+      free(url);
+      free(b64_signature);
+    }
+
+    vTaskDelay(pdMS_TO_TICKS(10)); // Small delay to prevent tight looping
   }
 
-  printf("NDEF URI written in chunks.\n");
-
-  free(url);
-  free(b64_signature);
 #endif
 }

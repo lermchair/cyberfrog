@@ -3,19 +3,16 @@ dependencies:
     source:
       type: idf
     version: 5.3.1
-  rjrp44/st25dv:
-    component_hash: 4bf030cf8accf1ee7c5248b85e1b2dc2bc978f15e38efbcaf53cf4ee31fd5ad8
-    dependencies:
-    - name: idf
-      require: private
-      version: '>=5.0'
+  zorxx/neopixel:
+    component_hash: eb2457ac2b7fca04be1834cf3af7a901f72969918a30ce68a1c1b0c160306201
+    dependencies: []
     source:
       registry_url: https://components.espressif.com/
       type: service
-    version: 0.1.3
+    version: 1.0.10
 direct_dependencies:
 - idf
-- rjrp44/st25dv
-manifest_hash: 44a5687e179ebdb90a0ded2cb14e53c553a2eddcb2703576d020735da0dbd5c5
+- zorxx/neopixel
+manifest_hash: ce3f46c93e34a8dc90bbe9ffed3be6f38f5c340d3c1207facdbc4020e7183693
 target: esp32c3
 version: 2.0.0

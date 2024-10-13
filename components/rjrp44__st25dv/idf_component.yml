@@ -1,0 +1,8 @@
+dependencies:
+  idf:
+    version: '>=5.0'
+description: A st25dv library for esp32 using the esp-idf framework.
+license: MIT
+repository: https://github.com/RJRP44/ST25DV-Library
+url: https://github.com/RJRP44/ST25DV-Library
+version: 0.1.3

@@ -78,11 +78,20 @@ int load_rsa_key(mbedtls_pk_context *key, unsigned char *pem_key,
 
 char *rsa_sign_to_base64(mbedtls_pk_context *key,
                          mbedtls_ctr_drbg_context *ctr_drbg,
-                         unsigned char *message) {
+                         unsigned char *message, size_t message_len) {
+
   size_t hash_len = 32;
+  unsigned char padded_message[32] = {0}; // Initialize with zeros
   unsigned char hash[hash_len];
   unsigned char signature[MBEDTLS_MPI_MAX_SIZE];
   size_t signature_len;
+
+  // Pad the message
+  if (message_len > 32) {
+    printf("Error: Message length exceeds 32 bytes\n");
+    return NULL;
+  }
+  memcpy(padded_message, message, message_len);
 
   mbedtls_md_context_t md_ctx;
   mbedtls_md_type_t md_type = MBEDTLS_MD_SHA256;
@@ -99,7 +108,7 @@ char *rsa_sign_to_base64(mbedtls_pk_context *key,
     printf("mbedtls_md_setup returned -0x%04x\n", -mbedtls_ret);
     return NULL;
   }
-  mbedtls_ret = mbedtls_md(md_info, message, hash_len, hash);
+  mbedtls_ret = mbedtls_md(md_info, padded_message, hash_len, hash);
   if (mbedtls_ret != 0) {
     printf("mbedtls_md returned -0x%04x\n", -mbedtls_ret);
     return NULL;
@@ -125,6 +134,55 @@ char *rsa_sign_to_base64(mbedtls_pk_context *key,
   signature_to_base64(signature, signature_len, b64_signature, b64_len);
 
   return b64_signature;
+}
+
+int rsa_verify_signature(mbedtls_pk_context *key, const unsigned char *message,
+                         size_t message_len, const unsigned char *signature,
+                         size_t signature_len) {
+  unsigned char padded_message[32] = {0}; // Initialize with zeros
+  unsigned char hash[32];
+  mbedtls_md_context_t md_ctx;
+  mbedtls_md_type_t md_type = MBEDTLS_MD_SHA256;
+  const mbedtls_md_info_t *md_info = mbedtls_md_info_from_type(md_type);
+
+  // Pad the message
+  if (message_len > 32) {
+    printf("Error: Message length exceeds 32 bytes\n");
+    return -1;
+  }
+  memcpy(padded_message, message, message_len);
+
+  if (md_info == NULL) {
+    printf("Failed to get md_info for md_type %d\n", md_type);
+    return -1;
+  }
+
+  mbedtls_md_init(&md_ctx);
+  int ret = mbedtls_md_setup(&md_ctx, md_info, 0);
+  if (ret != 0) {
+    printf("mbedtls_md_setup returned -0x%04x\n", -ret);
+    mbedtls_md_free(&md_ctx);
+    return -1;
+  }
+
+  ret = mbedtls_md(md_info, padded_message, 32, hash);
+  if (ret != 0) {
+    printf("mbedtls_md returned -0x%04x\n", -ret);
+    mbedtls_md_free(&md_ctx);
+    return -1;
+  }
+
+  mbedtls_md_free(&md_ctx);
+
+  ret = mbedtls_pk_verify(key, md_type, hash, sizeof(hash), signature,
+                          signature_len);
+  if (ret == 0) {
+    printf("Signature is valid.\n");
+    return 0;
+  } else {
+    printf("Signature verification failed: -0x%04x\n", -ret);
+    return -1;
+  }
 }
 
 // void rsa_cleanup(struct rsa_config *config) {

@@ -1,6 +1,6 @@
 #include "utils.h"
-#include <mbedtls/pk.h>
 #include "mbedtls/base64.h"
+#include <mbedtls/pk.h>
 #include <string.h>
 
 void signature_to_hex(const unsigned char *signature, size_t sig_len,
@@ -140,203 +140,44 @@ void uint32_to_char(uint32_t num, unsigned char *output) {
   output[3] = num & 0xFF;
 }
 
-esp_err_t st25dv_ndef_write_content_patched(st25dv_config st25dv,
-                                            uint16_t *address, bool mb, bool me,
-                                            const std25dv_ndef_record record) {
-  uint8_t type_size = strlen(record.type);
-  uint16_t payload_size = strlen(record.payload);
+int get_public_key(mbedtls_pk_context *pk, char *output, size_t output_size) {
+  int ret;
+  unsigned char der_buf[1024];
+  size_t der_len = 0;
+  unsigned char base64_buf[1400]; // Increased buffer size for base64 encoding
+  size_t base64_len = 0;
+  const char *begin_public_key = "-----BEGIN PUBLIC KEY-----\n";
+  const char *end_public_key = "-----END PUBLIC KEY-----\n";
+  size_t total_len;
 
-  uint8_t *record_data = malloc(NDEF_RECORD_SIZE(mb, type_size, payload_size));
+  // Write the public key to DER format
+  ret = mbedtls_pk_write_pubkey_der(pk, der_buf, sizeof(der_buf));
+  if (ret < 0) {
+    return ret;
+  }
+  der_len = ret;
 
-  uint8_t *data = record_data;
-
-  // Total length : Record header + Type length + Payload length + ID + Type +
-  // Payload
-  uint16_t record_length =
-      1 + 1 + (payload_size > 0xFF ? 4 : 1) + 1 + type_size + payload_size;
-
-  // If this ndef is the first one
-  if (mb) {
-    // Type5 Tag TLV-Format: T
-    *data++ = ST25DV_TYPE5_NDEF_MESSAGE;
-
-    // Type5 Tag TLV-Format: L
-    if (record_length > 0xFE) {
-      *data++ = 0xFF;
-      *data++ = record_length >> 8;
-      *data++ = record_length & 0xFF;
-    } else {
-      *data++ = record_length;
-    }
+  // Base64 encode the DER data
+  ret = mbedtls_base64_encode(base64_buf, sizeof(base64_buf), &base64_len,
+                              der_buf + sizeof(der_buf) - der_len, der_len);
+  if (ret != 0) {
+    return ret;
   }
 
-  // Type5 Tag TLV-Format: V
-  uint8_t tnf = 0;
-  tnf |= mb ? NDEF_ST25DV_MB : 0;
-  tnf |= me ? NDEF_ST25DV_ME : 0;
-  tnf |= payload_size > 0xFF ? 0 : NDEF_ST25DV_SR;
-  tnf |= NDEF_ST25DV_IL;
-  tnf |= record.tnf;
-  *data++ = tnf;
+  // Calculate total length needed for PEM format
+  total_len =
+      strlen(begin_public_key) + base64_len + strlen(end_public_key) + 1;
 
-  // Type length
-  *data++ = type_size;
-
-  // Payload length
-  if (payload_size > 0xFF) {
-    *data++ = payload_size >> 24;
-    *data++ = (payload_size >> 16) & 0xFF;
-    *data++ = (payload_size >> 8) & 0xFF;
-    *data++ = payload_size & 0xFF;
-  } else {
-    *data++ = payload_size;
+  // Check if output buffer is large enough
+  if (output_size < total_len) {
+    return -1; // Output buffer too small
   }
 
-  // ID
-  *data++ = 0x00;
+  // Construct PEM string
+  strcpy(output, begin_public_key);
+  strncat(output, (char *)base64_buf, base64_len);
+  strcat(output, "\n"); // Add a newline after base64 data
+  strcat(output, end_public_key);
 
-  // Add record type
-  memcpy(data, record.type, type_size);
-  data += type_size;
-
-  // Add record payload
-  memcpy(data, record.payload, payload_size);
-  data += payload_size;
-
-  uint8_t record_address = CCFILE_LENGTH;
-
-  if (*address > CCFILE_LENGTH) {
-    record_address = *address;
-  }
-
-  // If this ndef record is not the first one, we need to update the TLV-Format
-  // L value
-  if (!mb) {
-
-    // Read the possible 3 byte l value
-    uint8_t *l_value = malloc(0x03);
-    st25dv_read(st25dv.user_address, CCFILE_LENGTH + 1, l_value, 0x03);
-    uint16_t old_length = 0;
-    uint16_t total_length;
-
-    if (*l_value == 0xFF) {
-      // The l value is already 3 byte long
-      old_length |= *(l_value + 1) << 8;
-      old_length |= *(l_value + 2) & 0xFF;
-
-      total_length = old_length + record_length;
-
-      *(l_value + 1) = total_length >> 8;
-      *(l_value + 2) = total_length & 0xFF;
-
-      // Update the value
-      st25dv_write(st25dv.user_address, CCFILE_LENGTH + 1, l_value, 0x03);
-    } else {
-      // The l value is 1 byte long
-      old_length = *l_value;
-
-      total_length = old_length + record_length;
-
-      if (total_length > 0xFE) {
-        // The l value is 1 byte but needs to be 3
-        *l_value = 0xFF;
-        *(l_value + 1) = total_length >> 8;
-        *(l_value + 2) = total_length & 0xFF;
-
-        // Copy and move the existing records
-        uint8_t *st25dv_content = malloc(old_length);
-        st25dv_read(st25dv.user_address, CCFILE_LENGTH + 2, st25dv_content,
-                    old_length);
-        st25dv_write(st25dv.user_address, CCFILE_LENGTH + 1, l_value, 0x03);
-        vTaskDelay(100 / portTICK_PERIOD_MS);
-        st25dv_write(st25dv.user_address, CCFILE_LENGTH + 4, st25dv_content,
-                     old_length);
-        record_address += 2;
-        free(st25dv_content);
-      } else {
-        // The l value is already 1 byte
-        *l_value = total_length;
-
-        // Update the value
-        st25dv_write_byte(st25dv.user_address, CCFILE_LENGTH + 1, *l_value);
-      }
-    }
-    free(l_value);
-  }
-
-  uint16_t total_size = data - record_data;
-  uint16_t bytes_written = 0;
-  uint8_t *write_ptr = record_data;
-
-  while (bytes_written < total_size) {
-    uint16_t chunk_size = (total_size - bytes_written) > 0xFF
-                              ? 0xFF
-                              : (total_size - bytes_written);
-
-    esp_err_t write_result =
-        st25dv_write(st25dv.user_address, record_address + bytes_written,
-                     write_ptr, chunk_size);
-    if (write_result != ESP_OK) {
-      free(record_data);
-      return write_result;
-    }
-
-    bytes_written += chunk_size;
-    write_ptr += chunk_size;
-
-    vTaskDelay(100 / portTICK_PERIOD_MS);
-  }
-  // Add terminator
-  if (me) {
-    st25dv_write_byte(st25dv.user_address,
-                      record_address + (data - record_data),
-                      ST25DV_TYPE5_TERMINATOR_TLV);
-  }
-
-  *address = record_address + (data - record_data);
-
-  free(record_data);
-  return ESP_OK;
-}
-
-int get_public_key(mbedtls_pk_context *pk, char *output, size_t output_size)
-{
-    int ret;
-        unsigned char der_buf[1024];
-        size_t der_len = 0;
-        unsigned char base64_buf[1400];  // Increased buffer size for base64 encoding
-        size_t base64_len = 0;
-        const char *begin_public_key = "-----BEGIN PUBLIC KEY-----\n";
-        const char *end_public_key = "-----END PUBLIC KEY-----\n";
-        size_t total_len;
-
-        // Write the public key to DER format
-        ret = mbedtls_pk_write_pubkey_der(pk, der_buf, sizeof(der_buf));
-        if (ret < 0) {
-            return ret;
-        }
-        der_len = ret;
-
-        // Base64 encode the DER data
-        ret = mbedtls_base64_encode(base64_buf, sizeof(base64_buf), &base64_len,
-                                    der_buf + sizeof(der_buf) - der_len, der_len);
-        if (ret != 0) {
-            return ret;
-        }
-
-        // Calculate total length needed for PEM format
-        total_len = strlen(begin_public_key) + base64_len + strlen(end_public_key) + 1;
-
-        // Check if output buffer is large enough
-        if (output_size < total_len) {
-            return -1;  // Output buffer too small
-        }
-
-        // Construct PEM string
-        strcpy(output, begin_public_key);
-        strncat(output, (char *)base64_buf, base64_len);
-        strcat(output, "\n");  // Add a newline after base64 data
-        strcat(output, end_public_key);
-
-        return strlen(output);
+  return strlen(output);
 }

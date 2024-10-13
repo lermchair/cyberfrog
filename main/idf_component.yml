@@ -1,6 +1,6 @@
 ## IDF Component Manager Manifest File
 dependencies:
-  rjrp44/st25dv: "^0.1.0"
+  zorxx/neopixel: "*"
   ## Required IDF version
   idf:
     version: ">=4.1.0"
