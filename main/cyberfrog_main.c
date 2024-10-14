@@ -1,8 +1,9 @@
+#include "ecdsa.h"
 #include "esp_system.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
-#include "slow_sig.h"
+#include "rsa.h"
 #include "utils.h"
 #include <driver/gpio.h>
 #include <driver/i2c.h>
@@ -25,7 +26,7 @@
 #define DEBOUNCE_TIME_US 700000 // 700ms debounce time
 #define CC_FILE_ADDR 0x0000
 
-static mbedtls_pk_context key;
+static mbedtls_ecdsa_context key;
 static mbedtls_ctr_drbg_context ctr_drbg;
 static mbedtls_entropy_context entropy;
 
@@ -35,11 +36,6 @@ size_t public_key_len;
 static _Atomic uint_least32_t nonce = 0;
 
 static volatile bool nfc_operation_pending = false;
-
-typedef struct {
-  st25dv_config *st25dv_cfg;
-  char *public_key_pem;
-} nfc_task_params;
 
 uint32_t get_nonce() {
   uint32_t nonce_value = atomic_fetch_add(&nonce, 1);
@@ -148,9 +144,9 @@ void app_main(void) {
   st25dv_config st25dv_config = {ST25DV_USER_ADDRESS, ST25DV_SYSTEM_ADDRESS};
   st25dv_init_i2c(I2C_NUM_0, i2c_config);
 
-  int ret = rsa_init(&key, &ctr_drbg, &entropy);
+  int ret = ecdsa_init(&key, &ctr_drbg, &entropy);
   if (ret != 0) {
-    printf("Failed to set up RSA\n");
+    printf("Failed to set up ECDSA \n");
     return;
   }
 
@@ -161,7 +157,7 @@ void app_main(void) {
 
   size_t saved_size = 0;
 
-  err = nvs_get_blob(nvs_handle, "rsa_key", NULL, &saved_size);
+  err = nvs_get_blob(nvs_handle, "ecdsa_key", NULL, &saved_size);
   if (err != ESP_OK && err != ESP_ERR_NVS_NOT_FOUND) {
     printf("Error (%s) getting private key size from NVS!",
            esp_err_to_name(err));
@@ -170,13 +166,20 @@ void app_main(void) {
 
   if (saved_size == 0) {
     printf("No saved key found, generating new key\n");
-    unsigned char *pem_key = generate_rsa_pem_key(&key, &ctr_drbg);
-    if (pem_key == NULL) {
-      printf("Failed to generate RSA key\n");
+    char *pubkey_hex = generate_ecdsa_key(&key, &ctr_drbg);
+    if (pubkey_hex == NULL) {
+      printf("Failed to generate ECDSA key\n");
       return;
     }
-    size_t pem_key_len = strlen((char *)pem_key) + 1; // Include null terminator
-    err = nvs_set_blob(nvs_handle, "rsa_key", pem_key, pem_key_len);
+    unsigned char priv_buf[MBEDTLS_ECP_MAX_BYTES];
+    size_t priv_len;
+    ret =
+        mbedtls_ecp_write_key_ext(&key, &priv_len, priv_buf, sizeof(priv_buf));
+    if (ret != 0) {
+      printf("Failed to export private key: -0x%04x\n", -ret);
+      return;
+    }
+    err = nvs_set_blob(nvs_handle, "ecdsa_key", priv_buf, sizeof(priv_buf));
     if (err != ESP_OK) {
       printf("Error (%s) saving private key to NVS!\n", esp_err_to_name(err));
       nvs_close(nvs_handle);
@@ -188,34 +191,35 @@ void app_main(void) {
       nvs_close(nvs_handle);
       return;
     }
-    printf("RSA Private key saved to NVS.\n");
+    printf("Private key saved to NVS.\n");
     nvs_close(nvs_handle);
-    free(pem_key); // IMPORTANT
-    pem_key = NULL;
+    zero_memory(priv_buf, sizeof(priv_buf));
   } else {
     printf("Loading saved key from NVS\n");
-    unsigned char *pem_key = malloc(saved_size);
-    if (pem_key == NULL) {
+    unsigned char *pkey = malloc(saved_size);
+    if (pkey == NULL) {
       printf("Failed to allocate memory for reading private key\n");
       nvs_close(nvs_handle);
       return;
     }
-    err = nvs_get_blob(nvs_handle, "rsa_key", pem_key, &saved_size);
+    err = nvs_get_blob(nvs_handle, "ecdsa_key", pkey, &saved_size);
     if (err != ESP_OK) {
       printf("Error (%s) reading private key from NVS!\n",
              esp_err_to_name(err));
-      free(pem_key);
+      free(pkey);
       nvs_close(nvs_handle);
       return;
     }
     printf("Read private key from NVS.\n");
-    int mbedtls_ret = load_rsa_key(&key, pem_key, saved_size);
+    int mbedtls_ret = load_ecdsa_key(&key, &ctr_drbg, pkey);
     if (mbedtls_ret != 0) {
-      printf("Failed to load RSA key\n");
-      free(pem_key);
+      printf("Failed to load key\n");
+      free(pkey);
       nvs_close(nvs_handle);
       return;
     }
+    char *pubkey_hex = get_ecdsa_public_key(&key);
+    printf("Public key: %s\n", pubkey_hex);
     nvs_close(nvs_handle);
   }
 
@@ -233,42 +237,27 @@ void app_main(void) {
   gpio_isr_handler_add(NFC_INT_PIN, gpio_isr_handler, NULL);
   printf("Installed GPIO ISR for GPIO %d\n", NFC_INT_PIN);
 
-  public_key_len = get_public_key(&key, public_key, sizeof(public_key));
-  if (public_key_len < 0) {
-    printf("Unable to get public key\n");
-    return;
-  } else {
-    printf("Using public key:\n %s\n", public_key);
-  }
+  // configure_and_set_gpio_high(LED_EN);
 
-  char *public_key_copy = malloc(public_key_len + 1);
-  if (public_key_copy == NULL) {
-    printf("Failed to allocate memory for public key\n");
-    return;
-  }
-  memcpy(public_key_copy, public_key, public_key_len);
-  public_key_copy[public_key_len] = '\0';
+  // tNeopixelContext neopixel = neopixel_Init(6, LED_PIN);
 
-  configure_and_set_gpio_high(LED_EN);
+  // if (neopixel == NULL) {
+  //   printf("Failed to initialize Neopixel\n");
+  //   return;
+  // }
 
-  tNeopixelContext neopixel = neopixel_Init(6, LED_PIN);
+  // printf("Starting neopixels...\n");
+  // for (int i = 0; i < 10 * 6; ++i) {
+  //   tNeopixel pixel[] = {
+  //       {(i) % 6, NP_RGB(0, 0, 0)}, {(i + 5) % 6, NP_RGB(0, 50, 0)}, /* green
+  //                                                                     */
+  //   };
+  //   neopixel_SetPixel(neopixel, pixel, ARRAY_SIZE(pixel));
+  //   vTaskDelay(pdMS_TO_TICKS(200));
+  // }
 
-  if (neopixel == NULL) {
-    printf("Failed to initialize Neopixel\n");
-    return;
-  }
-
-  printf("Starting neopixels...\n");
-  for (int i = 0; i < 10 * 6; ++i) {
-    tNeopixel pixel[] = {
-        {(i) % 6, NP_RGB(0, 0, 0)}, {(i + 5) % 6, NP_RGB(0, 50, 0)}, /* green */
-    };
-    neopixel_SetPixel(neopixel, pixel, ARRAY_SIZE(pixel));
-    vTaskDelay(pdMS_TO_TICKS(200));
-  }
-
-  neopixel_Deinit(neopixel);
-  gpio_set_level(LED_EN, 0);
+  // neopixel_Deinit(neopixel);
+  // gpio_set_level(LED_EN, 0);
 
   while (1) {
     if (nfc_operation_pending) {
@@ -279,9 +268,9 @@ void app_main(void) {
 
       unsigned char message[sizeof(uint32_t)];
       uint32_to_char(new_nonce, message);
-      char *b64_signature =
-          rsa_sign_to_base64(&key, &ctr_drbg, message, sizeof(message));
-      if (b64_signature == NULL) {
+      char *hex_sig =
+          ecdsa_sign_to_base64(&key, &ctr_drbg, message, sizeof(message));
+      if (hex_sig == NULL) {
         printf("Failed to sign message\n");
         continue;
       }
@@ -298,7 +287,7 @@ void app_main(void) {
       vTaskDelay(pdMS_TO_TICKS(100));
 
       uint16_t address = CC_FILE_ADDR + CCFILE_LENGTH;
-      char *url = format_url_safely(b64_signature);
+      char *url = format_url_safely(hex_sig);
       char record_type[] = "U";
       char record_payload[strlen(url) + 1];
       record_payload[0] = 0x04;
@@ -317,7 +306,6 @@ void app_main(void) {
       }
 
       free(url);
-      free(b64_signature);
     }
 
     vTaskDelay(pdMS_TO_TICKS(10));
@@ -325,3 +313,47 @@ void app_main(void) {
 
 #endif
 }
+
+// void app_main(void) {
+//   mbedtls_ecdsa_context ctx;
+//   mbedtls_ctr_drbg_context ctr_drbg;
+//   mbedtls_entropy_context entropy;
+//   char *private_key_hex;
+//   char *signature_hex;
+//   int ret;
+
+//   uint32_t nonce = 123;
+//   unsigned char message[sizeof(uint32_t)];
+//   uint32_to_char(nonce, message);
+
+//   // Initialize ECDSA context
+//   if (ecdsa_init(&ctx, &ctr_drbg, &entropy) != 0) {
+//     printf("Failed to initialize ECDSA context\n");
+//     return;
+//   }
+
+//   // Generate ECDSA key pair
+//   private_key_hex = generate_ecdsa_key(&ctx, &ctr_drbg);
+//   if (private_key_hex == NULL) {
+//     printf("Failed to generate ECDSA key\n");
+//     // ecdsa_clenup(&ctx, &ctr_drbg, &entropy);
+//     return;
+//   }
+
+//   // Sign the hash
+//   signature_hex = ecdsa_sign_to_hex(&ctx, &ctr_drbg, message,
+//   sizeof(message)); if (signature_hex == NULL) {
+//     printf("Failed to sign message\n");
+//     free(private_key_hex);
+//     // ecdsa_cleanup(&ctx, &ctr_drbg, &entropy);
+//     return;
+//   }
+
+//   // Verify the signature
+//   // size_t sig_len;
+//   // Clean up
+//   free(private_key_hex);
+//   free(signature_hex);
+
+//   return;
+// }

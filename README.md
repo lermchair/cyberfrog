@@ -1,57 +1,51 @@
-| Supported Targets | ESP32 | ESP32-C2 | ESP32-C3 | ESP32-C5 | ESP32-C6 | ESP32-C61 | ESP32-H2 | ESP32-P4 | ESP32-S2 | ESP32-S3 | Linux |
-| ----------------- | ----- | -------- | -------- | -------- | -------- | --------- | -------- | -------- | -------- | -------- | ----- |
+# Cyberfrog (firmware)
 
-# How to run
+## How to run
+
+Make sure you have [esp-idf](https://github.com/espressif/esp-idf) installed.
 
 1. `idf.py set_target esp32c3`
 2. `idf.py build flash monitor`
 
-# Hello World Example
+## Design
 
-Starts a FreeRTOS task to print "Hello World".
+## Hardware
+1.  Each Cyberfrog has a keypair
+  - Currently using RSA
+  - TODO: evaluate ECDSA (so we can use `ecrecover`)
+2. The keypair signs an incrementing nonce (uint32) every time someone reads the NFC tag
+3. We write the nonce and signature to the NFC tag:
+  - `zupass.org/embedded-zapps/frogcrypto?embedded-params={nonce=<nonce>&sig=<signature>&pubkey=<pubkey>}`
 
-(See the README.md file in the upper level 'examples' directory for more information about examples.)
+### Hardware setup
+1. Generate keypair for each Cyberfrog
+2. Save the public key to the FrogCrypto server DB
+  -  We need to derive a stable UUID from the public key, can convert to bigint and then to UUID
 
-## How to use example
+## Claiming flow
+1. User scans NFC tag
+2. Zupass link opens embedded FrogCrypto app: `frogcrypto.xyz/cyberfrog?nonce=<nonce>&sig=<signature>&pubkey=<pubkey>`
+3. FrogCrypto server
+  - Verifies the signature
+  - Checks if the nonce has been used before
+  - We issue a new frog and reset the rate limit (use the same feed logic as FrogCrypto)
 
-Follow detailed instructions provided specifically for this example.
+## Important Notes
+- The CyberFrog always signs an incrementing nonce on NFC tag read, regardless of server-side claim status or rate limit
 
-Select the instructions depending on Espressif chip installed on your development board:
+We need the following tables:
+- Nullifiers table:
+  - `id`: primary key
+  - `public_key`: the public key of the Frog
+  - `nonce`: last used nonce
+Unique constraint on `public_key` and `nonce`
 
-- [ESP32 Getting Started Guide](https://docs.espressif.com/projects/esp-idf/en/stable/get-started/index.html)
-- [ESP32-S2 Getting Started Guide](https://docs.espressif.com/projects/esp-idf/en/latest/esp32s2/get-started/index.html)
+- Cyberfrogs table:
+  - `id`: the public key of the Frog, can be the primary key
 
-## Example folder contents
+## Questions
+- What is the easiest/fastest way to save public keys during setup? Maybe put everything in a JSON file and then just do a bulk insert
 
-The project **hello_world** contains one source file in C language [hello_world_main.c](main/hello_world_main.c). The file is located in folder [main](main).
 
-ESP-IDF projects are built using CMake. The project build configuration is contained in `CMakeLists.txt` files that provide set of directives and instructions describing the project's source files and targets (executable, library, or both).
-
-Below is short explanation of remaining files in the project folder.
-
-```
-├── CMakeLists.txt
-├── pytest_hello_world.py      Python script used for automated testing
-├── main
-│   ├── CMakeLists.txt
-│   └── hello_world_main.c
-└── README.md                  This is the file you are currently reading
-```
-
-For more information on structure and contents of ESP-IDF projects, please refer to Section [Build System](https://docs.espressif.com/projects/esp-idf/en/latest/esp32/api-guides/build-system.html) of the ESP-IDF Programming Guide.
-
-## Troubleshooting
-
-- Program upload failure
-
-  - Hardware connection is not correct: run `idf.py -p PORT monitor`, and reboot your board to see if there are any output logs.
-  - The baud rate for downloading is too high: lower your baud rate in the `menuconfig` menu, and try again.
-
-## Technical support and feedback
-
-Please use the following feedback channels:
-
-- For technical queries, go to the [esp32.com](https://esp32.com/) forum
-- For a feature request or bug report, create a [GitHub issue](https://github.com/espressif/esp-idf/issues)
-
-We will get back to you as soon as possible.
+# TODO
+- [ ] Prevent people from writing to the NFC tag (this is important)

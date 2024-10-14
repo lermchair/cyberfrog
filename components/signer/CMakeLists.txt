@@ -1,4 +1,4 @@
-idf_component_register(SRC_DIRS . 
+idf_component_register(SRCS "ecdsa.c" "rsa.c"
                        INCLUDE_DIRS .
                        REQUIRES mbedtls utils
                        )

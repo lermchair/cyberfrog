@@ -1,4 +1,5 @@
 #pragma once
+#include "utils.h"
 #include "mbedtls/ctr_drbg.h"
 #include <mbedtls/pk.h>
 #include <mbedtls/rsa.h>

@@ -27,10 +27,11 @@ void signature_to_base64(const unsigned char *signature, size_t sig_len,
                          char *base64_output, size_t out_len) {
   size_t i, j;
   uint32_t octet_a, octet_b, octet_c, triple;
+  printf("Debug: signature_to_base64 called with sig_len=%zu, out_len=%zu\n", sig_len, out_len);
 
   if (out_len < (sig_len * 4 / 3 + 4)) {
     // Not enough space in output buffer
-    base64_output[0] = '\0';
+    snprintf(base64_output, out_len, "Error: Insufficient buffer size");
     return;
   }
 
@@ -140,7 +141,7 @@ void uint32_to_char(uint32_t num, unsigned char *output) {
   output[3] = num & 0xFF;
 }
 
-int get_public_key(mbedtls_pk_context *pk, char *output, size_t output_size) {
+int get_rsa_public_key(mbedtls_pk_context *pk, char *output, size_t output_size) {
   int ret;
   unsigned char der_buf[1024];
   size_t der_len = 0;
@@ -180,4 +181,28 @@ int get_public_key(mbedtls_pk_context *pk, char *output, size_t output_size) {
   strcat(output, end_public_key);
 
   return strlen(output);
+}
+
+unsigned char *hex_to_binary(const char *hex_string, size_t *out_len) {
+  size_t len = strlen(hex_string) / 2;
+  unsigned char *binary = malloc(len);
+  *out_len = len;
+  for (size_t i = 0; i < len; i++) {
+    sscanf(hex_string + 2 * i, "%2hhx", &binary[i]);
+  }
+  return binary;
+}
+
+char *binary_to_hex(const unsigned char *data, size_t len) {
+  char *hex = malloc(len * 2 + 1);
+  for (size_t i = 0; i < len; i++) {
+    sprintf(hex + i * 2, "%02x", data[i]);
+  }
+  hex[len * 2] = '\0';
+  return hex;
+}
+
+void zero_memory(void *v, size_t n) {
+    volatile unsigned char *p = v;
+    while (n--) *p++ = 0;
 }
