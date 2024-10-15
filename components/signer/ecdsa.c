@@ -89,7 +89,8 @@ char *generate_ecdsa_key(mbedtls_ecdsa_context *ctx,
 
 char *ecdsa_sign_raw(mbedtls_ecdsa_context *ctx,
                      mbedtls_ctr_drbg_context *ctr_drbg,
-                     const unsigned char *message, size_t message_len, int recovery_id) {
+                     const unsigned char *message, size_t message_len,
+                     int recovery_id) {
   int ret;
   size_t hash_len = 32;
   unsigned char padded_message[32] = {0}; // Initialize with zeros
@@ -231,7 +232,7 @@ char *ecdsa_sign_raw(mbedtls_ecdsa_context *ctx,
   }
 
   ret = mbedtls_ecdsa_verify(grp, hash, sizeof(hash), &ctx->MBEDTLS_PRIVATE(Q),
-                              &r, &s);
+                             &r, &s);
   if (ret != 0) {
     char error_buf[100];
     mbedtls_strerror(ret, error_buf, sizeof(error_buf));

@@ -268,7 +268,8 @@ void app_main(void) {
       unsigned char message[sizeof(uint32_t)];
       uint32_to_char(new_nonce, message);
       int recovery_bit = 0;
-      char *hex_sig = ecdsa_sign_raw(&key, &ctr_drbg, message, sizeof(message), recovery_bit);
+      char *hex_sig = ecdsa_sign_raw(&key, &ctr_drbg, message, sizeof(message),
+                                     recovery_bit);
       if (hex_sig == NULL) {
         printf("Failed to sign message\n");
         continue;
@@ -286,7 +287,6 @@ void app_main(void) {
       vTaskDelay(pdMS_TO_TICKS(100));
 
       uint16_t address = CC_FILE_ADDR + CCFILE_LENGTH;
-      // The last bit is the recovery bit
       char *url = format_url_safely(hex_sig, recovery_bit);
       printf("URL: %s\n", url);
       char record_type[] = "U";
@@ -308,9 +308,8 @@ void app_main(void) {
 
       free(url);
 
-
-    vTaskDelay(pdMS_TO_TICKS(10));
-  }
+      vTaskDelay(pdMS_TO_TICKS(10));
+    }
 
 #endif
 }

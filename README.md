@@ -51,9 +51,6 @@ We need the following tables:
   - `nonce`: last used nonce
     Unique constraint on `public_key` and `nonce`
 
-- Cyberfrogs table:
-  - `id`: the public key of the Frog, can be the primary key
-
 ## Questions
 
 - What is the easiest/fastest way to save public keys during setup? Maybe put everything in a JSON file and then just do a bulk insert

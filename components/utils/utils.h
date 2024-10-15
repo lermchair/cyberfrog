@@ -1,10 +1,10 @@
 #pragma once
 #include <driver/gpio.h>
+#include <mbedtls/pk.h>
 #include <nvs.h>
 #include <st25dv.h>
 #include <st25dv_ndef.h>
 #include <stdint.h>
-#include <mbedtls/pk.h>
 
 typedef esp_err_t (*nvs_item_exists_callback)(nvs_handle_t handle,
                                               const char *key, void *output);
@@ -27,7 +27,8 @@ esp_err_t nvs_check_and_do(const char *namespace, const char *key, void *output,
 
 void uint32_to_char(uint32_t num, unsigned char *output);
 
-int get_rsa_public_key(mbedtls_pk_context *pk,  char *output, size_t output_size);
+int get_rsa_public_key(mbedtls_pk_context *pk, char *output,
+                       size_t output_size);
 unsigned char *hex_to_binary(const char *hex_string, size_t *out_len);
 char *binary_to_hex(const unsigned char *data, size_t len);
 void zero_memory(void *v, size_t n);
