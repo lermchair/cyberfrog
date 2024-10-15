@@ -85,10 +85,11 @@ esp_err_t configure_and_set_gpio_high(int pin) {
   return ESP_OK;
 }
 
-char *format_url_safely(const char *hex_signature) {
+char *format_url_safely(const char *hex_signature, int recovery_bit) {
   // Calculate the required length
+  printf("Recovery bit: %d\n", recovery_bit);
   size_t required_length =
-      snprintf(NULL, 0, "%s%s", "https://zupass.org/fake/", hex_signature);
+      snprintf(NULL, 0, "%s%s%d", "https://zupass.org/fake/", hex_signature, recovery_bit);
 
   // Allocate memory
   char *url = malloc(required_length + 1); // +1 for null terminator
@@ -98,8 +99,9 @@ char *format_url_safely(const char *hex_signature) {
   }
 
   // Format the string
-  snprintf(url, required_length + 1, "%s%s", "https://zupass.org/fake/",
-           hex_signature);
+  // The last bit is the recovery bit
+  snprintf(url, required_length + 1, "%s%s%d", "https://zupass.org/fake/",
+           hex_signature, recovery_bit);
 
   return url;
 }

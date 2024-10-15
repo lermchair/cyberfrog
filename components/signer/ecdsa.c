@@ -1,5 +1,6 @@
 #include "ecdsa.h"
-#include "mbedtls/ecp.h"
+#include "mbedtls/ecdsa.h"
+#include <mbedtls/error.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -22,8 +23,7 @@ int ecdsa_init(mbedtls_ecdsa_context *ctx, mbedtls_ctr_drbg_context *ctr_drbg,
 int load_ecdsa_key(mbedtls_ecdsa_context *ctx,
                    mbedtls_ctr_drbg_context *ctr_drbg, unsigned char *pkey) {
   int ret;
-  if ((ret = mbedtls_ecp_read_key(MBEDTLS_ECP_DP_SECP256R1, ctx, pkey,
-                                  sizeof(pkey)))) {
+  if ((ret = mbedtls_ecp_read_key(ECPARAMS, ctx, pkey, sizeof(pkey)))) {
     printf("failed\n  ! mbedtls_ecp_read_key returned -0x%04x\n", -ret);
     return NULL;
   }
@@ -38,25 +38,26 @@ int load_ecdsa_key(mbedtls_ecdsa_context *ctx,
 }
 
 char *get_ecdsa_public_key(mbedtls_ecdsa_context *ctx) {
-    unsigned char buf[300];
-    size_t len;
-    int ret;
+  unsigned char buf[300];
+  size_t len;
+  int ret;
 
-    ret = mbedtls_ecp_point_write_binary(&ctx->MBEDTLS_PRIVATE(grp), &ctx->MBEDTLS_PRIVATE(Q),
-                                         MBEDTLS_ECP_PF_COMPRESSED, &len, buf, sizeof(buf));
-    if (ret != 0) {
-        printf("Failed to write public key: -0x%04x\n", -ret);
-        return NULL;
-    }
+  ret = mbedtls_ecp_point_write_binary(
+      &ctx->MBEDTLS_PRIVATE(grp), &ctx->MBEDTLS_PRIVATE(Q),
+      MBEDTLS_ECP_PF_COMPRESSED, &len, buf, sizeof(buf));
+  if (ret != 0) {
+    printf("Failed to write public key: -0x%04x\n", -ret);
+    return NULL;
+  }
 
-    // Convert the binary public key to a hex string
-    char *pubkey_hex = binary_to_hex(buf, len);
-    if (pubkey_hex == NULL) {
-        printf("Failed to convert public key to hex\n");
-        return NULL;
-    }
+  // Convert the binary public key to a hex string
+  char *pubkey_hex = binary_to_hex(buf, len);
+  if (pubkey_hex == NULL) {
+    printf("Failed to convert public key to hex\n");
+    return NULL;
+  }
 
-    return pubkey_hex;
+  return pubkey_hex;
 }
 
 char *generate_ecdsa_key(mbedtls_ecdsa_context *ctx,
@@ -86,28 +87,18 @@ char *generate_ecdsa_key(mbedtls_ecdsa_context *ctx,
   return pubkey;
 }
 
-int ecdsa_verify_signature(mbedtls_ecdsa_context *ctx,
-                           const unsigned char *message, size_t message_len,
-                           const unsigned char *sig, size_t sig_len) {
-  int ret;
-  if ((ret = mbedtls_ecdsa_read_signature(ctx, message, message_len, sig,
-                                          sig_len)) != 0) {
-    printf(" failed\n  ! mbedtls_ecdsa_read_signature returned -0x%04x\n",
-           -ret);
-    return NULL;
-  }
-  return ret;
-}
-
-char *ecdsa_sign_to_base64(mbedtls_ecdsa_context *ctx,
-                        mbedtls_ctr_drbg_context *ctr_drbg,
-                        const unsigned char *message, size_t message_len) {
+char *ecdsa_sign_raw(mbedtls_ecdsa_context *ctx,
+                     mbedtls_ctr_drbg_context *ctr_drbg,
+                     const unsigned char *message, size_t message_len, int recovery_id) {
   int ret;
   size_t hash_len = 32;
   unsigned char padded_message[32] = {0}; // Initialize with zeros
   unsigned char hash[hash_len];
-  unsigned char signature[MBEDTLS_ECDSA_MAX_SIG_LEN(256)];
-  size_t signature_len;
+  mbedtls_mpi r, s, k, e, k_inv, n2, tmp;
+  mbedtls_ecp_point R;
+  mbedtls_ecp_point Q;
+  unsigned char buf[64]; // 1 byte for recid, 64 bytes for r and s
+  char *hex_sig = NULL;  // Initialize to NULL
 
   if (message_len > 32) {
     printf("Error: Message length exceeds 32 bytes\n");
@@ -124,23 +115,143 @@ char *ecdsa_sign_to_base64(mbedtls_ecdsa_context *ctx,
 
   printf("Message hash: %s\n", binary_to_hex(hash, hash_len));
 
-  if ((ret = mbedtls_ecdsa_write_signature(
-           ctx, MBEDTLS_MD_SHA256, hash, sizeof(hash), signature,
-           sizeof(signature), &signature_len, mbedtls_ctr_drbg_random,
-           ctr_drbg)) != 0) {
-    printf(" failed\n  ! mbedtls_ecdsa_write_signature returned -0x%04x\n",
-           -ret);
-    return NULL;
+  mbedtls_mpi_init(&r);
+  mbedtls_mpi_init(&s);
+  mbedtls_mpi_init(&k);
+  mbedtls_mpi_init(&e);
+  mbedtls_mpi_init(&k_inv);
+  mbedtls_mpi_init(&n2);
+  mbedtls_mpi_init(&tmp);
+  mbedtls_ecp_point_init(&R);
+  mbedtls_ecp_point_init(&Q);
+
+  mbedtls_ecp_group *grp = &ctx->MBEDTLS_PRIVATE(grp);
+
+  // Generate ephemeral key k
+  if ((ret = mbedtls_ecp_gen_privkey(grp, &k, mbedtls_ctr_drbg_random,
+                                     ctr_drbg)) != 0) {
+    printf(" failed\n  ! mbedtls_ecp_gen_privkey returned -0x%04x\n", -ret);
+    goto cleanup;
   }
 
-  char *hex_sig = binary_to_hex(signature, signature_len);
-  printf("Signature: %s\n", hex_sig);
-  int valid =
-      ecdsa_verify_signature(ctx, hash, hash_len, signature, signature_len);
-  if (valid != 0) {
-    printf("Signature verification failed\n");
-    return NULL;
+  // Compute R = k * G
+  if ((ret = mbedtls_ecp_mul(grp, &R, &k, &grp->G, mbedtls_ctr_drbg_random,
+                             ctr_drbg)) != 0) {
+    printf(" failed\n  ! mbedtls_ecp_mul returned -0x%04x\n", -ret);
+    goto cleanup;
   }
+
+  // Compute r = R.x mod n
+  if ((ret = mbedtls_mpi_mod_mpi(&r, &R.MBEDTLS_PRIVATE(X), &grp->N)) != 0) {
+    printf(" failed\n  ! mbedtls_mpi_mod_mpi returned -0x%04x\n", -ret);
+    goto cleanup;
+  }
+
+  // Compute e = hash as mpi
+  if ((ret = mbedtls_mpi_read_binary(&e, hash, hash_len)) != 0) {
+    printf(" failed\n  ! mbedtls_mpi_read_binary returned -0x%04x\n", -ret);
+    goto cleanup;
+  }
+
+  // Compute k_inv = k^-1 mod n
+  if ((ret = mbedtls_mpi_inv_mod(&k_inv, &k, &grp->N)) != 0) {
+    printf(" failed\n  ! mbedtls_mpi_inv_mod returned -0x%04x\n", -ret);
+    goto cleanup;
+  }
+
+  // Compute tmp = (e + r*d) mod n
+  if ((ret = mbedtls_mpi_mul_mpi(&tmp, &r, &ctx->MBEDTLS_PRIVATE(d))) != 0) {
+    printf(" failed\n  ! mbedtls_mpi_mul_mpi returned -0x%04x\n", -ret);
+    goto cleanup;
+  }
+  if ((ret = mbedtls_mpi_add_mpi(&tmp, &tmp, &e)) != 0) {
+    printf(" failed\n  ! mbedtls_mpi_add_mpi returned -0x%04x\n", -ret);
+    goto cleanup;
+  }
+  if ((ret = mbedtls_mpi_mod_mpi(&tmp, &tmp, &grp->N)) != 0) {
+    printf(" failed\n  ! mbedtls_mpi_mod_mpi returned -0x%04x\n", -ret);
+    goto cleanup;
+  }
+
+  // Compute s = k_inv * tmp mod n
+  if ((ret = mbedtls_mpi_mul_mpi(&s, &k_inv, &tmp)) != 0) {
+    printf(" failed\n  ! mbedtls_mpi_mul_mpi returned -0x%04x\n", -ret);
+    goto cleanup;
+  }
+  if ((ret = mbedtls_mpi_mod_mpi(&s, &s, &grp->N)) != 0) {
+    printf(" failed\n  ! mbedtls_mpi_mod_mpi returned -0x%04x\n", -ret);
+    goto cleanup;
+  }
+
+  // Compute id = y1 & 1
+  recovery_id = mbedtls_mpi_get_bit(&R.MBEDTLS_PRIVATE(Y), 0);
+
+  // Compute n2 = n / 2
+  if ((ret = mbedtls_mpi_copy(&n2, &grp->N)) != 0) {
+    printf(" failed\n  ! mbedtls_mpi_copy returned -0x%04x\n", -ret);
+    goto cleanup;
+  }
+  if ((ret = mbedtls_mpi_shift_r(&n2, 1)) != 0) { // n2 = n >> 1
+    printf(" failed\n  ! mbedtls_mpi_shift_r returned -0x%04x\n", -ret);
+    goto cleanup;
+  }
+
+  // If s > n/2, s = n - s, id ^= 1
+  if (mbedtls_mpi_cmp_mpi(&s, &n2) > 0) {
+    if ((ret = mbedtls_mpi_sub_mpi(&s, &grp->N, &s)) != 0) {
+      printf(" failed\n  ! mbedtls_mpi_sub_mpi returned -0x%04x\n", -ret);
+      goto cleanup;
+    }
+    recovery_id ^= 1;
+  }
+
+  // Ensure r and s are 32 bytes each
+  memset(buf, 0, sizeof(buf));
+
+  printf("Recovery ID: %d\n", recovery_id);
+
+  // Write r and s to buf
+  if ((ret = mbedtls_mpi_write_binary(&r, buf, 32)) != 0) {
+    printf(" failed\n  ! mbedtls_mpi_write_binary for r returned -0x%04x\n",
+           -ret);
+    goto cleanup;
+  }
+
+  if ((ret = mbedtls_mpi_write_binary(&s, buf + 32, 32)) != 0) {
+    printf(" failed\n  ! mbedtls_mpi_write_binary for s returned -0x%04x\n",
+           -ret);
+    goto cleanup;
+  }
+
+  // Convert the signature to hex string
+  hex_sig = binary_to_hex(buf, 64);
+  if (hex_sig == NULL) {
+    printf(" failed\n  ! binary_to_hex returned NULL\n");
+    goto cleanup;
+  }
+
+  ret = mbedtls_ecdsa_verify(grp, hash, sizeof(hash), &ctx->MBEDTLS_PRIVATE(Q),
+                              &r, &s);
+  if (ret != 0) {
+    char error_buf[100];
+    mbedtls_strerror(ret, error_buf, sizeof(error_buf));
+    printf("Signature verification failed: %s\n", error_buf);
+    return NULL;
+  } else {
+    printf("Signature verified successfully\n");
+  }
+
+  printf("Encoded Signature with Recovery ID: %s\n", hex_sig);
+
+cleanup:
+  mbedtls_mpi_free(&r);
+  mbedtls_mpi_free(&s);
+  mbedtls_mpi_free(&k);
+  mbedtls_mpi_free(&e);
+  mbedtls_mpi_free(&k_inv);
+  mbedtls_mpi_free(&n2);
+  mbedtls_mpi_free(&tmp);
+  mbedtls_ecp_point_free(&R);
+
   return hex_sig;
-  // TODO: convert to base64
 }

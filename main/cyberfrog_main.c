@@ -3,7 +3,6 @@
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
-#include "rsa.h"
 #include "utils.h"
 #include <driver/gpio.h>
 #include <driver/i2c.h>
@@ -268,8 +267,8 @@ void app_main(void) {
 
       unsigned char message[sizeof(uint32_t)];
       uint32_to_char(new_nonce, message);
-      char *hex_sig =
-          ecdsa_sign_to_base64(&key, &ctr_drbg, message, sizeof(message));
+      int recovery_bit = 0;
+      char *hex_sig = ecdsa_sign_raw(&key, &ctr_drbg, message, sizeof(message), recovery_bit);
       if (hex_sig == NULL) {
         printf("Failed to sign message\n");
         continue;
@@ -287,7 +286,9 @@ void app_main(void) {
       vTaskDelay(pdMS_TO_TICKS(100));
 
       uint16_t address = CC_FILE_ADDR + CCFILE_LENGTH;
-      char *url = format_url_safely(hex_sig);
+      // The last bit is the recovery bit
+      char *url = format_url_safely(hex_sig, recovery_bit);
+      printf("URL: %s\n", url);
       char record_type[] = "U";
       char record_payload[strlen(url) + 1];
       record_payload[0] = 0x04;
@@ -306,54 +307,10 @@ void app_main(void) {
       }
 
       free(url);
-    }
+
 
     vTaskDelay(pdMS_TO_TICKS(10));
   }
 
 #endif
 }
-
-// void app_main(void) {
-//   mbedtls_ecdsa_context ctx;
-//   mbedtls_ctr_drbg_context ctr_drbg;
-//   mbedtls_entropy_context entropy;
-//   char *private_key_hex;
-//   char *signature_hex;
-//   int ret;
-
-//   uint32_t nonce = 123;
-//   unsigned char message[sizeof(uint32_t)];
-//   uint32_to_char(nonce, message);
-
-//   // Initialize ECDSA context
-//   if (ecdsa_init(&ctx, &ctr_drbg, &entropy) != 0) {
-//     printf("Failed to initialize ECDSA context\n");
-//     return;
-//   }
-
-//   // Generate ECDSA key pair
-//   private_key_hex = generate_ecdsa_key(&ctx, &ctr_drbg);
-//   if (private_key_hex == NULL) {
-//     printf("Failed to generate ECDSA key\n");
-//     // ecdsa_clenup(&ctx, &ctr_drbg, &entropy);
-//     return;
-//   }
-
-//   // Sign the hash
-//   signature_hex = ecdsa_sign_to_hex(&ctx, &ctr_drbg, message,
-//   sizeof(message)); if (signature_hex == NULL) {
-//     printf("Failed to sign message\n");
-//     free(private_key_hex);
-//     // ecdsa_cleanup(&ctx, &ctr_drbg, &entropy);
-//     return;
-//   }
-
-//   // Verify the signature
-//   // size_t sig_len;
-//   // Clean up
-//   free(private_key_hex);
-//   free(signature_hex);
-
-//   return;
-// }
