@@ -1,8 +1,11 @@
 #include "ecdsa.h"
+#include "esp_sleep.h"
 #include "esp_system.h"
+#include "esp_task_wdt.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "portmacro.h"
 #include "utils.h"
 #include <driver/gpio.h>
 #include <driver/i2c.h>
@@ -22,6 +25,9 @@
 #define NFC_INT_PIN 4
 #define LED_PIN 6
 #define LED_EN 7
+#define VEXT_PIN 0
+#define SW_PIN 2
+
 #define DEBOUNCE_TIME_US 700000 // 700ms debounce time
 #define CC_FILE_ADDR 0x0000
 
@@ -35,6 +41,7 @@ size_t public_key_len;
 static _Atomic uint_least32_t nonce = 0;
 
 static volatile bool nfc_operation_pending = false;
+static TaskHandle_t nfc_task_handle = NULL;
 
 uint32_t get_nonce() {
   uint32_t nonce_value = atomic_fetch_add(&nonce, 1);
@@ -100,6 +107,29 @@ esp_err_t init_nonce_from_nvs(_Atomic uint_least32_t *nonce) {
   return ESP_OK;
 }
 
+void enable_sleep() {
+  gpio_config_t io_conf = {};
+  esp_err_t res = configure_and_set_gpio_high(SW_PIN, &io_conf);
+  if (res != ESP_OK) {
+    printf("Failed to configure GPIO: %s", esp_err_to_name(res));
+    return;
+  }
+  vTaskDelay(pdMS_TO_TICKS(5));
+  io_conf.mode = GPIO_MODE_INPUT;
+  gpio_config(&io_conf);
+  esp_sleep_enable_gpio_wakeup();
+
+  gpio_wakeup_enable(VEXT_PIN, GPIO_INTR_HIGH_LEVEL);
+  gpio_wakeup_enable(NFC_INT_PIN, GPIO_INTR_HIGH_LEVEL);
+  gpio_wakeup_enable(SW_PIN, GPIO_INTR_LOW_LEVEL);
+
+  gpio_pulldown_dis(SW_PIN);
+  gpio_pullup_dis(SW_PIN);
+
+  gpio_hold_en(SW_PIN);
+  esp_deep_sleep_start();
+}
+
 void IRAM_ATTR gpio_isr_handler(void *arg);
 static volatile bool gpio_interrupt_flag = false;
 static volatile int64_t last_interrupt_time = 0;
@@ -109,7 +139,73 @@ void IRAM_ATTR gpio_isr_handler(void *arg) {
   static int64_t last_interrupt_time = 0;
   if (current_time - last_interrupt_time > DEBOUNCE_TIME_US) {
     last_interrupt_time = current_time;
-    nfc_operation_pending = true;
+    BaseType_t xHigherPriorityTaskWoken = pdFALSE;
+    vTaskNotifyGiveFromISR(nfc_task_handle, &xHigherPriorityTaskWoken);
+    if (xHigherPriorityTaskWoken) {
+      portYIELD_FROM_ISR();
+    }
+  }
+}
+
+typedef struct {
+  st25dv_config st25dv_conf;
+} nfc_task_params_t;
+
+void nfc_task(void *pvParameters) {
+  nfc_task_params_t *params = (nfc_task_params_t *)pvParameters;
+  st25dv_config st25dv_config = params->st25dv_conf;
+  while (1) {
+    uint32_t notification_value = ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+    if (notification_value > 0) {
+      uint32_t new_nonce = get_nonce();
+      printf("Got nonce: %lu\n", new_nonce);
+
+      unsigned char message[sizeof(uint32_t)];
+      uint32_to_char(new_nonce, message);
+      int recovery_bit = 0;
+      char *hex_sig = ecdsa_sign_raw(&key, &ctr_drbg, message, sizeof(message),
+                                     recovery_bit);
+      if (hex_sig == NULL) {
+        printf("Failed to sign message\n");
+        continue;
+      }
+
+      uint8_t *blank = malloc(256);
+      memset(blank, 0x00, 256);
+      st25dv_write(ST25DV_USER_ADDRESS, 0x00, blank, 256);
+      free(blank);
+
+      vTaskDelay(pdMS_TO_TICKS(100));
+
+      st25dv_ndef_write_ccfile(0x00040000010040E2);
+
+      vTaskDelay(pdMS_TO_TICKS(100));
+
+      uint16_t address = CC_FILE_ADDR + CCFILE_LENGTH;
+      char *url = format_url_safely(hex_sig, recovery_bit, new_nonce);
+      printf("URL: %s\n", url);
+      char record_type[] = "U";
+      char record_payload[strlen(url) + 1];
+      record_payload[0] = 0x04;
+      strcpy(record_payload + 1, url + 8);
+
+      std25dv_ndef_record url_record = {.tnf = NDEF_ST25DV_TNF_WELL_KNOWN,
+                                        .type = record_type,
+                                        .payload = record_payload};
+
+      esp_err_t err = st25dv_ndef_write_content(st25dv_config, &address, true,
+                                                true, url_record);
+      if (err != ESP_OK) {
+        printf("Failed to write NDEF record: %s\n", esp_err_to_name(err));
+      } else {
+        printf("NDEF record written successfully\n");
+      }
+
+      free(url);
+
+      // esp_task_wdt_reset();
+    }
+    vTaskDelay(pdMS_TO_TICKS(10)); // Short delay to prevent tight loop
   }
 }
 
@@ -128,7 +224,12 @@ void app_main(void) {
   printf("Oopsie, not implemented\n");
   return;
 #else
-  ESP_ERROR_CHECK(configure_and_set_gpio_high(10));
+  gpio_config_t vnfc_io_conf = {};
+  err = configure_and_set_gpio_high(VNFC_PIN, &vnfc_io_conf);
+  if (err != ESP_OK) {
+    printf("Failed to configure GPIO: %s", esp_err_to_name(err));
+    return;
+  }
   vTaskDelay(100 / portTICK_PERIOD_MS);
 
   i2c_config_t i2c_config = {
@@ -224,6 +325,15 @@ void app_main(void) {
 
   ESP_ERROR_CHECK(init_nonce_from_nvs(&nonce));
 
+  nfc_task_params_t *nfc_params = malloc(sizeof(nfc_task_params_t));
+  if (nfc_params == NULL) {
+    printf("Failed to allocate memory for NFC task parameters\n");
+    return;
+  }
+  nfc_params->st25dv_conf = st25dv_config;
+
+  xTaskCreate(nfc_task, "nfc_task", 8192, nfc_params, 5, &nfc_task_handle);
+
   gpio_config_t nfc_int_config = {
       .intr_type = GPIO_INTR_POSEDGE,
       .mode = GPIO_MODE_INPUT,
@@ -257,59 +367,6 @@ void app_main(void) {
 
   // neopixel_Deinit(neopixel);
   // gpio_set_level(LED_EN, 0);
-
-  while (1) {
-    if (nfc_operation_pending) {
-      nfc_operation_pending = false;
-
-      uint32_t new_nonce = get_nonce();
-      printf("Got nonce: %lu\n", new_nonce);
-
-      unsigned char message[sizeof(uint32_t)];
-      uint32_to_char(new_nonce, message);
-      int recovery_bit = 0;
-      char *hex_sig = ecdsa_sign_raw(&key, &ctr_drbg, message, sizeof(message),
-                                     recovery_bit);
-      if (hex_sig == NULL) {
-        printf("Failed to sign message\n");
-        continue;
-      }
-
-      uint8_t *blank = malloc(256);
-      memset(blank, 0x00, 256);
-      st25dv_write(ST25DV_USER_ADDRESS, 0x00, blank, 256);
-      free(blank);
-
-      vTaskDelay(pdMS_TO_TICKS(100));
-
-      st25dv_ndef_write_ccfile(0x00040000010040E2);
-
-      vTaskDelay(pdMS_TO_TICKS(100));
-
-      uint16_t address = CC_FILE_ADDR + CCFILE_LENGTH;
-      char *url = format_url_safely(hex_sig, recovery_bit);
-      printf("URL: %s\n", url);
-      char record_type[] = "U";
-      char record_payload[strlen(url) + 1];
-      record_payload[0] = 0x04;
-      strcpy(record_payload + 1, url + 8);
-
-      std25dv_ndef_record url_record = {.tnf = NDEF_ST25DV_TNF_WELL_KNOWN,
-                                        .type = record_type,
-                                        .payload = record_payload};
-
-      esp_err_t err = st25dv_ndef_write_content(st25dv_config, &address, true,
-                                                true, url_record);
-      if (err != ESP_OK) {
-        printf("Failed to write NDEF record: %s\n", esp_err_to_name(err));
-      } else {
-        printf("NDEF record written successfully\n");
-      }
-
-      free(url);
-
-      vTaskDelay(pdMS_TO_TICKS(10));
-    }
 
 #endif
 }

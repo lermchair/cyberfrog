@@ -47,9 +47,10 @@ We need the following tables:
 - Nullifiers table:
 
   - `id`: primary key
-  - `public_key`: the public key of the Frog
-  - `nonce`: last used nonce
-    Unique constraint on `public_key` and `nonce`
+  - `nullifier`: sha256(public_key, nonce)
+  - `created_at`: timestamp
+
+Unique constraint on `nullifier`
 
 ## Questions
 

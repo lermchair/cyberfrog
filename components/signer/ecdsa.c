@@ -1,68 +1,95 @@
 #include "ecdsa.h"
 #include "mbedtls/ecdsa.h"
+#include <math.h>
 #include <mbedtls/error.h>
 #include <stdio.h>
 #include <string.h>
 
 int ecdsa_init(mbedtls_ecdsa_context *ctx, mbedtls_ctr_drbg_context *ctr_drbg,
                mbedtls_entropy_context *entropy) {
+  int ret = 0;
   mbedtls_ecdsa_init(ctx);
   mbedtls_ctr_drbg_init(ctr_drbg);
   mbedtls_entropy_init(entropy);
 
   const char *pers = "ecdsa";
-  int ret = mbedtls_ctr_drbg_seed(ctr_drbg, mbedtls_entropy_func, entropy,
-                                  (const unsigned char *)pers, strlen(pers));
+  ret = mbedtls_ctr_drbg_seed(ctr_drbg, mbedtls_entropy_func, entropy,
+                              (const unsigned char *)pers, strlen(pers));
   if (ret != 0) {
     printf("mbedtls_ctr_drbg_seed returned -0x%04x\n", -ret);
-    return -1;
+    goto cleanup;
   }
-  return 0;
+cleanup:
+  if (ret != 0) {
+    mbedtls_ecdsa_free(ctx);
+    mbedtls_ctr_drbg_free(ctr_drbg);
+    mbedtls_entropy_free(entropy);
+  }
+  return ret;
 }
 
 int load_ecdsa_key(mbedtls_ecdsa_context *ctx,
                    mbedtls_ctr_drbg_context *ctr_drbg, unsigned char *pkey) {
-  int ret;
+  int ret = 0;
   if ((ret = mbedtls_ecp_read_key(ECPARAMS, ctx, pkey, sizeof(pkey)))) {
     printf("failed\n  ! mbedtls_ecp_read_key returned -0x%04x\n", -ret);
-    return NULL;
+    // return NULL;
+    goto cleanup;
   }
   if ((ret = mbedtls_ecp_keypair_calc_public(ctx, mbedtls_ctr_drbg_random,
                                              ctr_drbg))) {
     printf("failed\n  ! mbedtls_ecp_keypair_calc_public returned -0x%04x\n",
            -ret);
-    return NULL;
+    // return NULL;
+    goto cleanup;
   }
   printf("Load ECDSA key success\n");
-  return 0;
+cleanup:
+  if (ret != 0) {
+    mbedtls_ecdsa_free(ctx);
+  }
+  return ret;
+  // return 0;
 }
 
 char *get_ecdsa_public_key(mbedtls_ecdsa_context *ctx) {
   unsigned char buf[300];
   size_t len;
-  int ret;
+  int ret = 0;
+  char *pubkey_hex = NULL;
 
   ret = mbedtls_ecp_point_write_binary(
       &ctx->MBEDTLS_PRIVATE(grp), &ctx->MBEDTLS_PRIVATE(Q),
       MBEDTLS_ECP_PF_COMPRESSED, &len, buf, sizeof(buf));
   if (ret != 0) {
     printf("Failed to write public key: -0x%04x\n", -ret);
-    return NULL;
+    // return NULL;
+    goto cleanup;
   }
 
   // Convert the binary public key to a hex string
-  char *pubkey_hex = binary_to_hex(buf, len);
+  pubkey_hex = binary_to_hex(buf, len);
   if (pubkey_hex == NULL) {
     printf("Failed to convert public key to hex\n");
-    return NULL;
+    // return NULL;
+    goto cleanup;
   }
 
+cleanup:
+  if (ret != 0 && pubkey_hex != NULL) {
+    free(pubkey_hex);
+    pubkey_hex = NULL;
+  }
   return pubkey_hex;
 }
 
 char *generate_ecdsa_key(mbedtls_ecdsa_context *ctx,
                          mbedtls_ctr_drbg_context *ctr_drbg) {
-  int ret;
+  int ret = 0;
+  unsigned char buf[300];
+  char *pubkey = NULL;
+  size_t len;
+
   if ((ret = mbedtls_ecdsa_genkey(ctx, ECPARAMS, mbedtls_ctr_drbg_random,
                                   ctr_drbg)) != 0) {
     printf(" failed\n  ! mbedtls_ecdsa_genkey returned %d\n", ret);
@@ -73,17 +100,25 @@ char *generate_ecdsa_key(mbedtls_ecdsa_context *ctx,
       mbedtls_ecp_curve_info_from_grp_id(grp_id);
   printf(" ok (key size: %d bits)\n", (int)curve_info->bit_size);
 
-  unsigned char buf[300];
-  size_t len;
-
   if (mbedtls_ecp_write_public_key(ctx, MBEDTLS_ECP_PF_COMPRESSED, &len, buf,
                                    sizeof(buf)) != 0) {
     printf("internal error\n");
-    return NULL;
+    goto cleanup;
+    // return NULL;
   }
 
-  char *pubkey = binary_to_hex(buf, len);
+  pubkey = binary_to_hex(buf, len);
+  if (pubkey == NULL) {
+    printf("Failed to convert public key to hex\n");
+    goto cleanup;
+  }
   printf("Public key: %s\n", pubkey);
+
+cleanup:
+  if (ret != 0 && pubkey != NULL) {
+    free(pubkey);
+    pubkey = NULL;
+  }
   return pubkey;
 }
 
@@ -98,7 +133,7 @@ char *ecdsa_sign_raw(mbedtls_ecdsa_context *ctx,
   mbedtls_mpi r, s, k, e, k_inv, n2, tmp;
   mbedtls_ecp_point R;
   mbedtls_ecp_point Q;
-  unsigned char buf[64]; // 1 byte for recid, 64 bytes for r and s
+  unsigned char buf[64]; // 64 bytes for r and s
   char *hex_sig = NULL;  // Initialize to NULL
 
   if (message_len > 32) {

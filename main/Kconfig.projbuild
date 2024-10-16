@@ -5,4 +5,10 @@ menu "Cyberfrog config"
 			bool "Use fast RSA signature (requires efuse)"
 			default n
 
+		config NFC_PASSWORD
+			string "NFC password"
+			default "12345678"
+			help
+				Password for NFC authentication
+
 endmenu

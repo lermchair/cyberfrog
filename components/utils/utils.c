@@ -27,7 +27,8 @@ void signature_to_base64(const unsigned char *signature, size_t sig_len,
                          char *base64_output, size_t out_len) {
   size_t i, j;
   uint32_t octet_a, octet_b, octet_c, triple;
-  printf("Debug: signature_to_base64 called with sig_len=%zu, out_len=%zu\n", sig_len, out_len);
+  printf("Debug: signature_to_base64 called with sig_len=%zu, out_len=%zu\n",
+         sig_len, out_len);
 
   if (out_len < (sig_len * 4 / 3 + 4)) {
     // Not enough space in output buffer
@@ -62,34 +63,40 @@ void signature_to_base64(const unsigned char *signature, size_t sig_len,
   base64_output[j] = '\0'; // Null-terminate the string
 }
 
-esp_err_t configure_and_set_gpio_high(int pin) {
-  gpio_config_t io_conf = {};
-  io_conf.intr_type = GPIO_INTR_DISABLE;
-  io_conf.mode = GPIO_MODE_OUTPUT;
-  io_conf.pin_bit_mask = (1ULL << pin);
-  io_conf.pull_down_en = 0;
-  io_conf.pull_up_en = 0;
+esp_err_t configure_and_set_gpio_high(int pin, gpio_config_t *io_conf) {
+    if (io_conf == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
 
-  esp_err_t ret = gpio_config(&io_conf);
-  if (ret != ESP_OK) {
-    printf("Failed to configure GPIO: %s", esp_err_to_name(ret));
-    return ret;
-  }
-  ret = gpio_set_level(pin, 1);
-  if (ret != ESP_OK) {
-    printf("Failed to set GPIO: %s", esp_err_to_name(ret));
-    return ret;
-  }
+    io_conf->intr_type = GPIO_INTR_DISABLE;
+    io_conf->mode = GPIO_MODE_OUTPUT;
+    io_conf->pin_bit_mask = (1ULL << pin);
+    io_conf->pull_down_en = 0;
+    io_conf->pull_up_en = 0;
 
-  printf("GPIO %u set to high\n", pin);
-  return ESP_OK;
+    esp_err_t ret = gpio_config(io_conf);
+    if (ret != ESP_OK) {
+        printf("Failed to configure GPIO: %s\n", esp_err_to_name(ret));
+        return ret;
+    }
+
+    ret = gpio_set_level(pin, 1);
+    if (ret != ESP_OK) {
+        printf("Failed to set GPIO: %s\n", esp_err_to_name(ret));
+        return ret;
+    }
+
+    printf("GPIO %d set to high\n", pin);
+    return ESP_OK;
 }
 
-char *format_url_safely(const char *hex_signature, int recovery_bit) {
+char *format_url_safely(const char *hex_signature, int recovery_bit,
+                        uint32_t nonce) {
   // Calculate the required length
   printf("Recovery bit: %d\n", recovery_bit);
   size_t required_length =
-      snprintf(NULL, 0, "%s%s%d", "https://zupass.org/fake/", hex_signature, recovery_bit);
+      snprintf(NULL, 0, "%s%s%d%lu", "https://zupass.org/fake/", hex_signature,
+               recovery_bit, nonce);
 
   // Allocate memory
   char *url = malloc(required_length + 1); // +1 for null terminator
@@ -98,10 +105,9 @@ char *format_url_safely(const char *hex_signature, int recovery_bit) {
     return NULL;
   }
 
-  // Format the string
   // The last bit is the recovery bit
-  snprintf(url, required_length + 1, "%s%s%d", "https://zupass.org/fake/",
-           hex_signature, recovery_bit);
+  snprintf(url, required_length + 1, "%s%s%d?nonce=%lu",
+           "https://zupass.org/fake/", hex_signature, recovery_bit, nonce);
 
   return url;
 }
@@ -143,7 +149,8 @@ void uint32_to_char(uint32_t num, unsigned char *output) {
   output[3] = num & 0xFF;
 }
 
-int get_rsa_public_key(mbedtls_pk_context *pk, char *output, size_t output_size) {
+int get_rsa_public_key(mbedtls_pk_context *pk, char *output,
+                       size_t output_size) {
   int ret;
   unsigned char der_buf[1024];
   size_t der_len = 0;
@@ -205,6 +212,7 @@ char *binary_to_hex(const unsigned char *data, size_t len) {
 }
 
 void zero_memory(void *v, size_t n) {
-    volatile unsigned char *p = v;
-    while (n--) *p++ = 0;
+  volatile unsigned char *p = v;
+  while (n--)
+    *p++ = 0;
 }
