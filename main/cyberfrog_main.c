@@ -35,13 +35,12 @@ static mbedtls_ecdsa_context key;
 static mbedtls_ctr_drbg_context ctr_drbg;
 static mbedtls_entropy_context entropy;
 
-static char public_key[1024];
-size_t public_key_len;
-
 static _Atomic uint_least32_t nonce = 0;
 
 static volatile bool nfc_operation_pending = false;
 static TaskHandle_t nfc_task_handle = NULL;
+
+#define ARRAY_SIZE(x) (sizeof(x) / sizeof(x[0]))
 
 uint32_t get_nonce() {
   uint32_t nonce_value = atomic_fetch_add(&nonce, 1);
@@ -130,11 +129,11 @@ void enable_sleep() {
   esp_deep_sleep_start();
 }
 
-void IRAM_ATTR gpio_isr_handler(void *arg);
+void IRAM_ATTR handle_nfc_scan(void *arg);
 static volatile bool gpio_interrupt_flag = false;
 static volatile int64_t last_interrupt_time = 0;
 
-void IRAM_ATTR gpio_isr_handler(void *arg) {
+void IRAM_ATTR handle_nfc_scan(void *arg) {
   int64_t current_time = esp_timer_get_time();
   static int64_t last_interrupt_time = 0;
   if (current_time - last_interrupt_time > DEBOUNCE_TIME_US) {
@@ -154,9 +153,34 @@ typedef struct {
 void nfc_task(void *pvParameters) {
   nfc_task_params_t *params = (nfc_task_params_t *)pvParameters;
   st25dv_config st25dv_config = params->st25dv_conf;
+  gpio_config_t led_en_gpio_conf = {};
+  configure_and_set_gpio_high(LED_EN, &led_en_gpio_conf);
+
+  tNeopixelContext neopixel = neopixel_Init(6, LED_PIN);
+
+  if (neopixel == NULL) {
+    printf("Failed to initialize Neopixel\n");
+    return;
+  }
   while (1) {
     uint32_t notification_value = ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
     if (notification_value > 0) {
+      // Flash/cycle pixels one by one
+      for (int i = 0; i < 6; i++) {
+        tNeopixel pixels[] = {
+            {i, NP_RGB(0, 50, 0)},         // Green color for active pixel
+            {(i + 1) % 6, NP_RGB(0, 0, 0)} // Turn off the next pixel
+        };
+        neopixel_SetPixel(neopixel, pixels, ARRAY_SIZE(pixels));
+        vTaskDelay(pdMS_TO_TICKS(100)); // Delay between pixel changes
+      }
+
+      // Turn off all pixels
+      tNeopixel pixels[6];
+      for (int i = 0; i < 6; i++) {
+        pixels[i] = (tNeopixel){i, NP_RGB(0, 0, 0)};
+      }
+      neopixel_SetPixel(neopixel, pixels, 6);
       uint32_t new_nonce = get_nonce();
       printf("Got nonce: %lu\n", new_nonce);
 
@@ -202,14 +226,12 @@ void nfc_task(void *pvParameters) {
       }
 
       free(url);
-
-      // esp_task_wdt_reset();
     }
-    vTaskDelay(pdMS_TO_TICKS(10)); // Short delay to prevent tight loop
+    vTaskDelay(pdMS_TO_TICKS(10));
   }
 }
 
-#define ARRAY_SIZE(x) (sizeof(x) / sizeof(x[0]))
+void IRAM_ATTR go_to_sleep(void *arg) { enable_sleep(); }
 
 void app_main(void) {
   esp_err_t err = nvs_flash_init();
@@ -219,6 +241,27 @@ void app_main(void) {
     err = nvs_flash_init();
   }
   ESP_ERROR_CHECK(err);
+
+  gpio_config_t vext_io_conf = {};
+  vext_io_conf.intr_type = GPIO_INTR_DISABLE;
+  vext_io_conf.mode = GPIO_MODE_INPUT;
+  vext_io_conf.pin_bit_mask = (1ULL << VEXT_PIN) | (1ULL << NFC_INT_PIN);
+  vext_io_conf.pull_up_en = GPIO_PULLUP_DISABLE;
+  vext_io_conf.pull_down_en = GPIO_PULLDOWN_DISABLE;
+  gpio_config(&vext_io_conf);
+  if (gpio_get_level(VEXT_PIN)) {
+    printf("External power found\n");
+
+    // gpio_install_isr_service(0);
+    // gpio_isr_handler_add(NFC_INT_PIN, myISR, NULL);
+    // gpio_set_intr_type(NFC_INT_PIN, GPIO_INTR_ANYEDGE);
+
+    gpio_isr_handler_add(VEXT_PIN, go_to_sleep, NULL);
+    gpio_set_intr_type(VEXT_PIN, GPIO_INTR_NEGEDGE);
+
+  } else {
+    esp_deep_sleep_start();
+  }
 
 #ifdef CONFIG_EFUSE_RSA_SIG
   printf("Oopsie, not implemented\n");
@@ -343,30 +386,8 @@ void app_main(void) {
   };
   gpio_config(&nfc_int_config);
   gpio_install_isr_service(0);
-  gpio_isr_handler_add(NFC_INT_PIN, gpio_isr_handler, NULL);
+  gpio_isr_handler_add(NFC_INT_PIN, handle_nfc_scan, NULL);
   printf("Installed GPIO ISR for GPIO %d\n", NFC_INT_PIN);
-
-  // configure_and_set_gpio_high(LED_EN);
-
-  // tNeopixelContext neopixel = neopixel_Init(6, LED_PIN);
-
-  // if (neopixel == NULL) {
-  //   printf("Failed to initialize Neopixel\n");
-  //   return;
-  // }
-
-  // printf("Starting neopixels...\n");
-  // for (int i = 0; i < 10 * 6; ++i) {
-  //   tNeopixel pixel[] = {
-  //       {(i) % 6, NP_RGB(0, 0, 0)}, {(i + 5) % 6, NP_RGB(0, 50, 0)}, /* green
-  //                                                                     */
-  //   };
-  //   neopixel_SetPixel(neopixel, pixel, ARRAY_SIZE(pixel));
-  //   vTaskDelay(pdMS_TO_TICKS(200));
-  // }
-
-  // neopixel_Deinit(neopixel);
-  // gpio_set_level(LED_EN, 0);
 
 #endif
 }
