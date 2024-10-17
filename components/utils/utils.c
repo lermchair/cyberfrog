@@ -64,50 +64,47 @@ void signature_to_base64(const unsigned char *signature, size_t sig_len,
 }
 
 esp_err_t configure_and_set_gpio_high(int pin, gpio_config_t *io_conf) {
-    if (io_conf == NULL) {
-        return ESP_ERR_INVALID_ARG;
-    }
+  if (io_conf == NULL) {
+    return ESP_ERR_INVALID_ARG;
+  }
 
-    io_conf->intr_type = GPIO_INTR_DISABLE;
-    io_conf->mode = GPIO_MODE_OUTPUT;
-    io_conf->pin_bit_mask = (1ULL << pin);
-    io_conf->pull_down_en = 0;
-    io_conf->pull_up_en = 0;
+  io_conf->intr_type = GPIO_INTR_DISABLE;
+  io_conf->mode = GPIO_MODE_OUTPUT;
+  io_conf->pin_bit_mask = (1ULL << pin);
+  io_conf->pull_down_en = 0;
+  io_conf->pull_up_en = 0;
 
-    esp_err_t ret = gpio_config(io_conf);
-    if (ret != ESP_OK) {
-        printf("Failed to configure GPIO: %s\n", esp_err_to_name(ret));
-        return ret;
-    }
+  esp_err_t ret = gpio_config(io_conf);
+  if (ret != ESP_OK) {
+    printf("Failed to configure GPIO: %s\n", esp_err_to_name(ret));
+    return ret;
+  }
 
-    ret = gpio_set_level(pin, 1);
-    if (ret != ESP_OK) {
-        printf("Failed to set GPIO: %s\n", esp_err_to_name(ret));
-        return ret;
-    }
+  ret = gpio_set_level(pin, 1);
+  if (ret != ESP_OK) {
+    printf("Failed to set GPIO: %s\n", esp_err_to_name(ret));
+    return ret;
+  }
 
-    printf("GPIO %d set to high\n", pin);
-    return ESP_OK;
+  printf("GPIO %d set to high\n", pin);
+  return ESP_OK;
 }
 
 char *format_url_safely(const char *hex_signature, int recovery_bit,
                         uint32_t nonce) {
-  // Calculate the required length
-  printf("Recovery bit: %d\n", recovery_bit);
-  size_t required_length =
-      snprintf(NULL, 0, "%s%s%d%lu", "https://zupass.org/fake/", hex_signature,
-               recovery_bit, nonce);
+  char *base_url = "https://zupass.org/fake/";
+  char *format_specifier = "%s%s%d?nonce=%lu";
+  size_t required_length = snprintf(NULL, 0, format_specifier, base_url,
+                                    hex_signature, recovery_bit, nonce);
 
-  // Allocate memory
   char *url = malloc(required_length + 1); // +1 for null terminator
   if (url == NULL) {
     fprintf(stderr, "Memory allocation failed\n");
     return NULL;
   }
 
-  // The last bit is the recovery bit
-  snprintf(url, required_length + 1, "%s%s%d?nonce=%lu",
-           "https://zupass.org/fake/", hex_signature, recovery_bit, nonce);
+  snprintf(url, required_length + 1, format_specifier, base_url, hex_signature,
+           recovery_bit, nonce);
 
   return url;
 }

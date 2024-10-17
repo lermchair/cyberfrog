@@ -52,10 +52,6 @@ We need the following tables:
 
 Unique constraint on `nullifier`
 
-## Questions
-
-- What is the easiest/fastest way to save public keys during setup? Maybe put everything in a JSON file and then just do a bulk insert
-
 # TODO
 
 - [ ] Prevent people from writing to the NFC tag (this is important)

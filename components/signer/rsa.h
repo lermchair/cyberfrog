@@ -17,4 +17,3 @@ char *rsa_sign_to_base64(mbedtls_pk_context *key,
 int rsa_verify_signature(mbedtls_pk_context *key, const unsigned char *message,
                          size_t message_len, const unsigned char *signature,
                          size_t signature_len);
-// *); void rsa_cleanup(struct rsa_config *);
