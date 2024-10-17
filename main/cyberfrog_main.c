@@ -1,3 +1,4 @@
+#include "driver/ledc.h"
 #include "ecdsa.h"
 #include "esp_sleep.h"
 #include "esp_system.h"
@@ -44,6 +45,40 @@ static volatile bool nfc_operation_pending = false;
 static TaskHandle_t nfc_task_handle = NULL;
 
 #define ARRAY_SIZE(x) (sizeof(x) / sizeof(x[0]))
+
+void play_tones() {
+  ledc_timer_config_t ledc_timer = {
+      .duty_resolution = LEDC_TIMER_12_BIT,
+      .freq_hz = 5000,
+      .speed_mode = LEDC_LOW_SPEED_MODE,
+      .timer_num = LEDC_TIMER_0,
+      .clk_cfg = LEDC_AUTO_CLK,
+  };
+  ledc_timer_config(&ledc_timer);
+
+  ledc_channel_config_t ledc_channel = {.channel = LEDC_CHANNEL_0,
+                                        .duty = 4096, // 50% of 2^13
+                                        .gpio_num = BUZ_PIN,
+                                        .speed_mode = LEDC_LOW_SPEED_MODE,
+                                        .hpoint = 0,
+                                        .timer_sel = LEDC_TIMER_0};
+  ledc_channel_config(&ledc_channel);
+
+  vTaskDelay(pdMS_TO_TICKS(10));
+
+  for (int i = 0; i < 6; i++) {
+    // Calculate frequency for each note
+    uint32_t freq =
+        262 * (1 << i); // Starting from C4 (262 Hz) and doubling for each step
+    ledc_set_freq(LEDC_LOW_SPEED_MODE, LEDC_TIMER_0, freq);
+    ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0, 128); // 50% duty cycle
+    ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0);
+    vTaskDelay(pdMS_TO_TICKS(200));
+  }
+
+  // Stop the tone
+  ledc_stop(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0, 0);
+}
 
 void enable_sleep() {
   // gpio_config_t io_conf = {};
@@ -109,7 +144,6 @@ void nfc_task(void *pvParameters) {
         vTaskDelay(pdMS_TO_TICKS(100));
       }
 
-      tNeopixel pixels[6];
       for (int i = 0; i < 6; i++) {
         pixels[i] = (tNeopixel){i, NP_RGB(0, 0, 0)};
       }
@@ -121,6 +155,7 @@ void nfc_task(void *pvParameters) {
         return;
       }
       vTaskDelay(100 / portTICK_PERIOD_MS);
+      play_tones();
 
       uint32_t new_nonce = get_and_update_nonce(&nonce);
       printf("Got nonce: %lu\n", new_nonce);
@@ -219,6 +254,14 @@ void app_main(void) {
   gpio_config(&nfc_int_config);
   gpio_isr_handler_add(NFC_INT_PIN, handle_nfc_scan, NULL);
   printf("Installed GPIO ISR for GPIO %d\n", NFC_INT_PIN);
+
+  gpio_config_t buz_io_conf = {};
+  buz_io_conf.intr_type = GPIO_INTR_POSEDGE;
+  buz_io_conf.mode = GPIO_MODE_INPUT;
+  buz_io_conf.pin_bit_mask = (1ULL << BUZ_PIN);
+  buz_io_conf.pull_up_en = 0;
+  buz_io_conf.pull_down_en = 0;
+  gpio_config(&buz_io_conf);
 
   if (gpio_get_level(VEXT_PIN)) {
     printf("External power found\n");
