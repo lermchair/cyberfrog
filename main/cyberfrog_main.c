@@ -144,6 +144,7 @@ void nfc_task(void *pvParameters) {
         vTaskDelay(pdMS_TO_TICKS(100));
       }
 
+      tNeopixel pixels[6];
       for (int i = 0; i < 6; i++) {
         pixels[i] = (tNeopixel){i, NP_RGB(0, 0, 0)};
       }
@@ -155,6 +156,7 @@ void nfc_task(void *pvParameters) {
         return;
       }
       vTaskDelay(100 / portTICK_PERIOD_MS);
+
       play_tones();
 
       uint32_t new_nonce = get_and_update_nonce(&nonce);
