@@ -1,4 +1,5 @@
 #include "utils.h"
+#include "driver/ledc.h"
 #include "mbedtls/base64.h"
 #include <mbedtls/pk.h>
 #include <string.h>
@@ -212,4 +213,38 @@ void zero_memory(void *v, size_t n) {
   volatile unsigned char *p = v;
   while (n--)
     *p++ = 0;
+}
+
+void play_tones(uint8_t buz_pin) {
+  ledc_timer_config_t ledc_timer = {
+      .duty_resolution = LEDC_TIMER_12_BIT,
+      .freq_hz = 5000,
+      .speed_mode = LEDC_LOW_SPEED_MODE,
+      .timer_num = LEDC_TIMER_0,
+      .clk_cfg = LEDC_AUTO_CLK,
+  };
+  ledc_timer_config(&ledc_timer);
+
+  ledc_channel_config_t ledc_channel = {.channel = LEDC_CHANNEL_0,
+                                        .duty = 4096, // 50% of 2^13
+                                        .gpio_num = buz_pin,
+                                        .speed_mode = LEDC_LOW_SPEED_MODE,
+                                        .hpoint = 0,
+                                        .timer_sel = LEDC_TIMER_0};
+  ledc_channel_config(&ledc_channel);
+
+  vTaskDelay(pdMS_TO_TICKS(10));
+
+  for (int i = 0; i < 6; i++) {
+    // Calculate frequency for each note
+    uint32_t freq =
+        262 * (1 << i); // Starting from C4 (262 Hz) and doubling for each step
+    ledc_set_freq(LEDC_LOW_SPEED_MODE, LEDC_TIMER_0, freq);
+    ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0, 128); // 50% duty cycle
+    ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0);
+    vTaskDelay(pdMS_TO_TICKS(200));
+  }
+
+  // Stop the tone
+  ledc_stop(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0, 0);
 }

@@ -30,9 +30,11 @@ Make sure you have [esp-idf](https://github.com/espressif/esp-idf) installed.
 
 ## Claiming flow
 
-1. User scans NFC tag
-2. Zupass link opens embedded FrogCrypto app: `frogcrypto.xyz/cyberfrog?nonce=<nonce>&sig=<signature>&pubkey=<pubkey>`
-3. FrogCrypto server
+1. User scans NFC tag. This gives them the most recently signed nonce
+2. A new nonce is generated and stored in the tag. If I scan again, I get rate-limited. However, a new nonce is generated anyway.
+3. This means we need to make sure the nullifier is created even if the rate limit is hit
+4. Zupass link opens embedded FrogCrypto app: `frogcrypto.xyz/cyberfrog?nonce=<nonce>&sig=<signature>&pubkey=<pubkey>`
+5. FrogCrypto server
 
 - Verifies the signature
 - Checks if the nonce has been used before

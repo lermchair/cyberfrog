@@ -32,3 +32,4 @@ int get_rsa_public_key(mbedtls_pk_context *pk, char *output,
 unsigned char *hex_to_binary(const char *hex_string, size_t *out_len);
 char *binary_to_hex(const unsigned char *data, size_t len);
 void zero_memory(void *v, size_t n);
+void play_tones(uint8_t buz_pin);

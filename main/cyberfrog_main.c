@@ -1,22 +1,19 @@
-#include "driver/ledc.h"
 #include "ecdsa.h"
-#include "esp_sleep.h"
-#include "esp_system.h"
-#include "esp_task_wdt.h"
-#include "esp_timer.h"
-#include "freertos/FreeRTOS.h"
-#include "freertos/task.h"
 #include "nonce.h"
-#include "portmacro.h"
+#include "st25dv_registers.h"
 #include "utils.h"
 #include <driver/gpio.h>
 #include <driver/i2c.h>
+#include <esp_sleep.h>
+#include <esp_timer.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
 #include <neopixel.h>
 #include <nvs.h>
 #include <nvs_flash.h>
+#include <portmacro.h>
 #include <st25dv.h>
 #include <st25dv_ndef.h>
-#include <stdatomic.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
@@ -32,8 +29,9 @@
 #define BUZ_PIN 5
 #define SW_PIN 2 // buttons
 
-#define DEBOUNCE_TIME_US 1000000 // 1ms debounce time
+#define DEBOUNCE_TIME_US 1500000 // 1.5s debounce time
 #define CC_FILE_ADDR 0x0000
+#define ARRAY_SIZE(x) (sizeof(x) / sizeof(x[0]))
 
 static mbedtls_ecdsa_context key;
 static mbedtls_ctr_drbg_context ctr_drbg;
@@ -44,45 +42,9 @@ static _Atomic uint_least32_t nonce = 0;
 static volatile bool nfc_operation_pending = false;
 static TaskHandle_t nfc_task_handle = NULL;
 
-#define ARRAY_SIZE(x) (sizeof(x) / sizeof(x[0]))
-
-void play_tones() {
-  ledc_timer_config_t ledc_timer = {
-      .duty_resolution = LEDC_TIMER_12_BIT,
-      .freq_hz = 5000,
-      .speed_mode = LEDC_LOW_SPEED_MODE,
-      .timer_num = LEDC_TIMER_0,
-      .clk_cfg = LEDC_AUTO_CLK,
-  };
-  ledc_timer_config(&ledc_timer);
-
-  ledc_channel_config_t ledc_channel = {.channel = LEDC_CHANNEL_0,
-                                        .duty = 4096, // 50% of 2^13
-                                        .gpio_num = BUZ_PIN,
-                                        .speed_mode = LEDC_LOW_SPEED_MODE,
-                                        .hpoint = 0,
-                                        .timer_sel = LEDC_TIMER_0};
-  ledc_channel_config(&ledc_channel);
-
-  vTaskDelay(pdMS_TO_TICKS(10));
-
-  for (int i = 0; i < 6; i++) {
-    // Calculate frequency for each note
-    uint32_t freq =
-        262 * (1 << i); // Starting from C4 (262 Hz) and doubling for each step
-    ledc_set_freq(LEDC_LOW_SPEED_MODE, LEDC_TIMER_0, freq);
-    ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0, 128); // 50% duty cycle
-    ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0);
-    vTaskDelay(pdMS_TO_TICKS(200));
-  }
-
-  // Stop the tone
-  ledc_stop(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0, 0);
-}
-
 void enable_sleep() {
   // gpio_config_t io_conf = {};
-  // esp_err_t res = configure_and_set_gpio_high(SW_PIN, &io_conf);
+  // esp_err_t rset_gpio_high(SW_PIN, &io_conf);
   // if (res != ESP_OK) {
   //   printf("Failed to configure GPIO: %s", esp_err_to_name(res));
   //   return;
@@ -104,17 +66,19 @@ void enable_sleep() {
 static volatile int64_t last_interrupt_time = 0;
 
 void IRAM_ATTR handle_nfc_scan(void *arg) {
-  int64_t current_time = esp_timer_get_time();
-  static int64_t last_interrupt_time = 0;
-  if (current_time - last_interrupt_time > DEBOUNCE_TIME_US) {
-    last_interrupt_time = current_time;
-    BaseType_t xHigherPriorityTaskWoken = pdFALSE;
-    vTaskNotifyGiveFromISR(nfc_task_handle, &xHigherPriorityTaskWoken);
-    if (xHigherPriorityTaskWoken) {
-      portYIELD_FROM_ISR();
+    int64_t current_time = esp_timer_get_time();
+    static int64_t last_interrupt_time = 0;
+
+    if (current_time - last_interrupt_time > DEBOUNCE_TIME_US) {
+        last_interrupt_time = current_time;
+        BaseType_t xHigherPriorityTaskWoken = pdFALSE;
+        vTaskNotifyGiveFromISR(nfc_task_handle, &xHigherPriorityTaskWoken);
+        if (xHigherPriorityTaskWoken) {
+            portYIELD_FROM_ISR();
+        }
     }
-  }
 }
+
 
 typedef struct {
   st25dv_config st25dv_conf;
@@ -137,6 +101,14 @@ void nfc_task(void *pvParameters) {
   while (1) {
     uint32_t notification_value = ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
     if (notification_value > 0) {
+      gpio_config_t vnfc_io_conf = {};
+      esp_err_t err = configure_and_set_gpio_high(VNFC_PIN, &vnfc_io_conf);
+      if (err != ESP_OK) {
+        printf("Failed to configure GPIO: %s", esp_err_to_name(err));
+        return;
+      }
+      vTaskDelay(100 / portTICK_PERIOD_MS);
+
       for (int i = 0; i < 6; i++) {
         tNeopixel pixels[] = {{i, NP_RGB(0, 50, 0)},
                               {(i + 1) % 6, NP_RGB(0, 0, 0)}};
@@ -149,15 +121,7 @@ void nfc_task(void *pvParameters) {
         pixels[i] = (tNeopixel){i, NP_RGB(0, 0, 0)};
       }
       neopixel_SetPixel(neopixel, pixels, 6);
-      gpio_config_t vnfc_io_conf = {};
-      esp_err_t err = configure_and_set_gpio_high(VNFC_PIN, &vnfc_io_conf);
-      if (err != ESP_OK) {
-        printf("Failed to configure GPIO: %s", esp_err_to_name(err));
-        return;
-      }
-      vTaskDelay(100 / portTICK_PERIOD_MS);
 
-      play_tones();
 
       uint32_t new_nonce = get_and_update_nonce(&nonce);
       printf("Got nonce: %lu\n", new_nonce);
@@ -171,13 +135,6 @@ void nfc_task(void *pvParameters) {
         printf("Failed to sign message\n");
         continue;
       }
-
-      uint8_t *blank = malloc(256);
-      memset(blank, 0x00, 256);
-      st25dv_write(ST25DV_USER_ADDRESS, 0x00, blank, 256);
-      free(blank);
-
-      vTaskDelay(pdMS_TO_TICKS(100));
 
       st25dv_ndef_write_ccfile(0x00040000010040E2);
 
@@ -201,10 +158,6 @@ void nfc_task(void *pvParameters) {
              payload_len - 1); // Exclude "https://"
       record_payload[payload_len] = '\0';
 
-      // char record_payload[strlen(url) + 1];
-      // record_payload[0] = 0x04;
-      // strcpy(record_payload + 1, url + 8);
-
       std25dv_ndef_record url_record = {.tnf = NDEF_ST25DV_TNF_WELL_KNOWN,
                                         .type = record_type,
                                         .payload = record_payload};
@@ -217,9 +170,12 @@ void nfc_task(void *pvParameters) {
         printf("NDEF record written successfully\n");
       }
 
+      gpio_set_level(VNFC_PIN, 0);
+
+      play_tones(BUZ_PIN);
+
       free(url);
       free(record_payload);
-      gpio_set_level(VNFC_PIN, 0);
     }
     vTaskDelay(pdMS_TO_TICKS(10));
   }
