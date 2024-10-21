@@ -1,8 +1,14 @@
 #include "utils.h"
+#include "constants.h"
 #include "driver/ledc.h"
+#include "ecdsa.h"
 #include "mbedtls/base64.h"
+#include "mbedtls/ctr_drbg.h"
+#include "mbedtls/ecdsa.h"
 #include <mbedtls/pk.h>
 #include <string.h>
+
+#define MAX_GPIO_PIN 48
 
 void signature_to_hex(const unsigned char *signature, size_t sig_len,
                       char *hex_output, size_t hex_len) {
@@ -91,6 +97,20 @@ esp_err_t configure_and_set_gpio_high(int pin, gpio_config_t *io_conf) {
   return ESP_OK;
 }
 
+esp_err_t configure_gpio(gpio_num_t pin, gpio_config_t *config) {
+  if (pin > MAX_GPIO_PIN) {
+    return ESP_ERR_INVALID_ARG;
+  }
+  if (config == NULL) {
+    return ESP_ERR_INVALID_ARG;
+  }
+  esp_err_t ret = gpio_config(config);
+  if (ret != ESP_OK) {
+    printf("Failed to configure GPIO %d: %s\n", pin, esp_err_to_name(ret));
+  }
+  return ret;
+}
+
 char *format_url_safely(const char *hex_signature, int recovery_bit,
                         uint32_t nonce) {
   char *base_url = "https://zupass.org/fake/";
@@ -108,36 +128,6 @@ char *format_url_safely(const char *hex_signature, int recovery_bit,
            recovery_bit, nonce);
 
   return url;
-}
-
-esp_err_t nvs_check_and_do(const char *namespace, const char *key, void *output,
-                           nvs_item_exists_callback exists_cb,
-                           nvs_item_not_exists_callback not_exists_cb) {
-  nvs_handle_t nvs_handle;
-  esp_err_t err;
-
-  err = nvs_open(namespace, NVS_READWRITE, &nvs_handle);
-  if (err != ESP_OK) {
-    printf("Error (%s) opening NVS handle!\n", esp_err_to_name(err));
-    return err;
-  }
-
-  size_t required_size = 0;
-  err = nvs_get_blob(nvs_handle, key, NULL, &required_size);
-
-  if (err == ESP_OK && required_size > 0) {
-    if (exists_cb) {
-      err = exists_cb(nvs_handle, key, output);
-    }
-  } else if (err == ESP_ERR_NVS_NOT_FOUND) {
-    if (not_exists_cb) {
-      err = not_exists_cb(nvs_handle, key, output);
-    }
-  } else {
-    printf("Error (%s) reading from NVS!\n", esp_err_to_name(err));
-  }
-  nvs_close(nvs_handle);
-  return err;
 }
 
 void uint32_to_char(uint32_t num, unsigned char *output) {
@@ -247,4 +237,96 @@ void play_tones(uint8_t buz_pin) {
 
   // Stop the tone
   ledc_stop(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0, 0);
+}
+
+esp_err_t generate_and_save_key(nvs_handle_t *nvs_handle,
+                                mbedtls_ecdsa_context *key,
+                                mbedtls_ctr_drbg_context *ctr_drbg) {
+  printf("No saved key found, generating new key\n");
+  char *pubkey_hex = generate_ecdsa_key(key, ctr_drbg);
+  if (pubkey_hex == NULL) {
+    printf("Failed to generate ECDSA key\n");
+    return ESP_FAIL;
+  }
+  unsigned char priv_buf[MBEDTLS_ECP_MAX_BYTES];
+  size_t priv_len;
+  int ret =
+      mbedtls_ecp_write_key_ext(key, &priv_len, priv_buf, sizeof(priv_buf));
+  if (ret != 0) {
+    printf("Failed to export private key: -0x%04x\n", -ret);
+    return ESP_FAIL;
+  }
+  esp_err_t err =
+      nvs_set_blob(*nvs_handle, "ecdsa_key", priv_buf, sizeof(priv_buf));
+  if (err != ESP_OK) {
+    printf("Error (%s) saving private key to NVS!\n", esp_err_to_name(err));
+    nvs_close(*nvs_handle);
+    return ESP_FAIL;
+  }
+  err = nvs_commit(*nvs_handle);
+  if (err != ESP_OK) {
+    printf("Error (%s) committing NVS!\n", esp_err_to_name(err));
+    nvs_close(*nvs_handle);
+    return ESP_FAIL;
+  }
+  printf("Private key saved to NVS.\n");
+  nvs_close(*nvs_handle);
+  zero_memory(priv_buf, sizeof(priv_buf));
+  return ESP_OK;
+}
+
+esp_err_t load_saved_key(nvs_handle_t *nvs_handle, size_t saved_size,
+                         mbedtls_ecdsa_context *key,
+                         mbedtls_ctr_drbg_context *ctr_drbg) {
+  printf("Loading saved key from NVS\n");
+  unsigned char *pkey = malloc(saved_size);
+  if (pkey == NULL) {
+    printf("Failed to allocate memory for reading private key\n");
+    nvs_close(*nvs_handle);
+    return ESP_ERR_NO_MEM;
+  }
+  esp_err_t err = nvs_get_blob(*nvs_handle, "ecdsa_key", pkey, &saved_size);
+  if (err != ESP_OK) {
+    printf("Error (%s) reading private key from NVS!\n", esp_err_to_name(err));
+    free(pkey);
+    nvs_close(*nvs_handle);
+    return ESP_ERR_NOT_FOUND;
+  }
+  printf("Read private key from NVS.\n");
+  int mbedtls_ret = load_ecdsa_key(key, ctr_drbg, pkey);
+  if (mbedtls_ret != 0) {
+    printf("Failed to load key\n");
+    free(pkey);
+    nvs_close(*nvs_handle);
+    return ESP_ERR_NOT_FOUND;
+  }
+  char *pubkey_hex = get_ecdsa_public_key(key);
+  printf("Public key: %s\n", pubkey_hex);
+  nvs_close(*nvs_handle);
+  return ESP_OK;
+}
+
+esp_err_t animate_leds(tNeopixelContext neopixel) {
+  for (int i = 0; i < 6; i++) {
+    tNeopixel pixels[] = {{i, NP_RGB(0, 50, 0)},
+                          {(i + 1) % 6, NP_RGB(0, 0, 0)}};
+    bool ret = neopixel_SetPixel(neopixel, pixels, ARRAY_SIZE(pixels));
+    if (!ret) {
+      printf("Failed to set pixel\n");
+      return ESP_FAIL;
+    }
+    vTaskDelay(pdMS_TO_TICKS(100));
+  }
+
+  // clear the pixels
+  tNeopixel pixels[6];
+  for (int i = 0; i < 6; i++) {
+    pixels[i] = (tNeopixel){i, NP_RGB(0, 0, 0)};
+  }
+  bool ret = neopixel_SetPixel(neopixel, pixels, 6);
+  if (!ret) {
+    printf("Failed to set pixel\n");
+    return ESP_FAIL;
+  }
+  return ESP_OK;
 }

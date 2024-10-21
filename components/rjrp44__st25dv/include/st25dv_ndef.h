@@ -43,16 +43,16 @@ typedef struct {
     uint8_t tnf;
     char *type;
     char *payload;
-} std25dv_ndef_record;
+} st25dv_ndef_record;
 
 esp_err_t st25dv_ndef_write_ccfile(uint64_t ccfile);
 
-esp_err_t st25dv_ndef_write_content(st25dv_config st25dv, uint16_t *address, bool mb, bool me, std25dv_ndef_record record);
-esp_err_t st25dv_ndef_write_content_old(st25dv_config st25dv, uint16_t *address, bool mb, bool me, std25dv_ndef_record record);
+esp_err_t st25dv_ndef_write_content(st25dv_config st25dv, uint16_t *address, bool mb, bool me, st25dv_ndef_record record);
+esp_err_t st25dv_ndef_write_content_old(st25dv_config st25dv, uint16_t *address, bool mb, bool me, st25dv_ndef_record record);
 esp_err_t st25dv_ndef_write_app_launcher_record(st25dv_config st25dv, uint16_t *address, bool mb, bool me, char *app_package);
 esp_err_t st25dv_ndef_write_json_record(st25dv_config st25dv, uint16_t *address, bool mb, bool me, cJSON *json_data);
 
-esp_err_t st25dv_ndef_read(st25dv_config st25dv, uint8_t record_num, std25dv_ndef_record *output_records, uint8_t *record_count);
-esp_err_t st25dv_ndef_delete_records(std25dv_ndef_record *record);
+esp_err_t st25dv_ndef_read(st25dv_config st25dv, uint8_t record_num, st25dv_ndef_record *output_records, uint8_t *record_count);
+esp_err_t st25dv_ndef_delete_records(st25dv_ndef_record *record);
 
 #endif //ST25DV_LIBRARY_NDEF

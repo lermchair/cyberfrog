@@ -17,7 +17,7 @@ esp_err_t st25dv_ndef_write_ccfile(uint64_t ccfile) {
 // TODO: clean up
 esp_err_t st25dv_ndef_write_content(st25dv_config st25dv, uint16_t *address,
                                     bool mb, bool me,
-                                    const std25dv_ndef_record record) {
+                                    const st25dv_ndef_record record) {
   printf("Entering st25dv_ndef_write_content\n");
 
   uint8_t type_size = strlen(record.type);
@@ -221,7 +221,7 @@ esp_err_t st25dv_ndef_write_content(st25dv_config st25dv, uint16_t *address,
 
 esp_err_t st25dv_ndef_write_content_old(st25dv_config st25dv, uint16_t *address,
                                         bool mb, bool me,
-                                        const std25dv_ndef_record record) {
+                                        const st25dv_ndef_record record) {
   uint8_t type_size = strlen(record.type);
   uint16_t payload_size = strlen(record.payload);
 
@@ -382,7 +382,7 @@ esp_err_t st25dv_ndef_write_app_launcher_record(st25dv_config st25dv,
                                                 uint16_t *address, bool mb,
                                                 bool me, char *app_package) {
   char record_type[] = NDEF_APP_LAUNCHER_TYPE;
-  std25dv_ndef_record record = {NDEF_ST25DV_TNF_EXTERNAL, record_type,
+  st25dv_ndef_record record = {NDEF_ST25DV_TNF_EXTERNAL, record_type,
                                 app_package};
   st25dv_ndef_write_content(st25dv, address, mb, me, record);
   return ESP_OK;
@@ -392,14 +392,14 @@ esp_err_t st25dv_ndef_write_json_record(st25dv_config st25dv, uint16_t *address,
                                         bool mb, bool me, cJSON *json_data) {
   char record_type[] = NDEF_JSON_TYPE;
   char *json = cJSON_PrintUnformatted(json_data);
-  std25dv_ndef_record record = {NDEF_ST25DV_TNF_MIME, record_type, json};
+  st25dv_ndef_record record = {NDEF_ST25DV_TNF_MIME, record_type, json};
   st25dv_ndef_write_content(st25dv, address, mb, me, record);
   free(json);
   return ESP_OK;
 }
 
 esp_err_t st25dv_ndef_read(st25dv_config st25dv, uint8_t record_num,
-                           std25dv_ndef_record *output_records,
+                           st25dv_ndef_record *output_records,
                            uint8_t *record_count) {
   // Get size of the first area
   uint8_t enda1 = 0;
@@ -510,7 +510,7 @@ esp_err_t st25dv_ndef_read(st25dv_config st25dv, uint8_t record_num,
   return ESP_OK;
 }
 
-esp_err_t st25dv_ndef_delete_records(std25dv_ndef_record *record) {
+esp_err_t st25dv_ndef_delete_records(st25dv_ndef_record *record) {
   free(record->type);
   free(record->payload);
   return ESP_OK;

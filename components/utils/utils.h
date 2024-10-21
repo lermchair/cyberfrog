@@ -1,5 +1,7 @@
 #pragma once
+#include "neopixel.h"
 #include <driver/gpio.h>
+#include <mbedtls/ctr_drbg.h>
 #include <mbedtls/pk.h>
 #include <nvs.h>
 #include <st25dv.h>
@@ -19,8 +21,10 @@ void signature_to_base64(const unsigned char *signature, size_t sig_len,
                          char *base64_output, size_t out_len);
 
 esp_err_t configure_and_set_gpio_high(int pin, gpio_config_t *io_conf);
+esp_err_t configure_gpio(gpio_num_t pin, gpio_config_t *config);
 
-char *format_url_safely(const char *hex_signature, int recovery_bit, uint32_t nonce);
+char *format_url_safely(const char *hex_signature, int recovery_bit,
+                        uint32_t nonce);
 esp_err_t nvs_check_and_do(const char *namespace, const char *key, void *output,
                            nvs_item_exists_callback exists_cb,
                            nvs_item_not_exists_callback not_exists_cb);
@@ -33,3 +37,13 @@ unsigned char *hex_to_binary(const char *hex_string, size_t *out_len);
 char *binary_to_hex(const unsigned char *data, size_t len);
 void zero_memory(void *v, size_t n);
 void play_tones(uint8_t buz_pin);
+
+esp_err_t load_saved_key(nvs_handle_t *nvs_handle, size_t saved_size,
+                         mbedtls_ecdsa_context *key,
+                         mbedtls_ctr_drbg_context *ctr_drbg);
+
+esp_err_t generate_and_save_key(nvs_handle_t *nvs_handle,
+                                mbedtls_ecdsa_context *key,
+                                mbedtls_ctr_drbg_context *ctr_drbg);
+
+esp_err_t animate_leds(tNeopixelContext neopixel);

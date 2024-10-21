@@ -1,6 +1,6 @@
 # ST25DV library for ESP32
 
-This is a library for ST's [ST25DV-I2C series](https://www.st.com/en/nfc/st25dv-i2c-series-dynamic-nfc-tags.html). The ST25DV chip is an RFID/NFC dynamic tag. It can be accessed by any NFC smartphone or NFC/RFID HF reader, and also by an MCU (an esp32 for this library), using the I²C wired link.  
+This is a library for ST's [ST25DV-I2C series](https://www.st.com/en/nfc/st25dv-i2c-series-dynamic-nfc-tags.html). The ST25DV chip is an RFID/NFC dynamic tag. It can be accessed by any NFC smartphone or NFC/RFID HF reader, and also by an MCU (an esp32 for this library), using the I²C wired link.
 
 
 > **Warning**
@@ -18,7 +18,7 @@ This is a library for ST's [ST25DV-I2C series](https://www.st.com/en/nfc/st25dv-
 
 The wiring is made with the [reference board](https://www.st.com/en/evaluation-tools/ant7-t-25dv64kc.html). Check the [datasheet](https://www.st.com/resource/en/datasheet/st25dv64kc.pdf) to wire directly the chip.
 
-| ST25DV Pins | ESP32S3 Pins                                  |           
+| ST25DV Pins | ESP32S3 Pins                                  |
 |-------------|-----------------------------------------------|
 | GND         | GND                                           |
 | VCC         | 3v3                                           |
@@ -33,7 +33,7 @@ So, you can use the [IDF Component Manager](https://docs.espressif.com/projects/
 To add this component to your project, run:
 
 ```log
-idf.py add-dependency "rjrp44/st25dv^0.1.0" 
+idf.py add-dependency "rjrp44/st25dv^0.1.0"
 ```
 
 ### Ndef
@@ -49,7 +49,7 @@ st25dv_config st25dv_config = {
 char record_type[] = "android.com:pkg";
 char record_payload[] = "fr.ouchat.app";
 
-std25dv_ndef_record record = {
+st25dv_ndef_record record = {
             NDEF_ST25DV_TNF_EXTERNAL,
             record_type,
             record_payload
@@ -72,13 +72,13 @@ Arguments of the function :
     - `0x05` : Unknown
     - `0x06` : Unchanged
     - `0x07` : Reserved
-  - `record_type` : The name of your record type 
+  - `record_type` : The name of your record type
   - `record_payload` : The payload
 
 To read data you can use this function `st25dv_ndef_read`
 
 ```c
-std25dv_ndef_record *read = malloc(sizeof(std25dv_ndef_record));
+st25dv_ndef_record *read = malloc(sizeof(std25dv_ndef_record));
 memset(read, 0 , sizeof(std25dv_ndef_record));
 
 uint8_t record_num = 2;
