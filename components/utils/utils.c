@@ -113,8 +113,8 @@ esp_err_t configure_gpio(gpio_num_t pin, gpio_config_t *config) {
 
 char *format_url_safely(const char *hex_signature, int recovery_bit,
                         uint32_t nonce) {
-  char *base_url = "https://zupass.org/fake/";
-  char *format_specifier = "%s%s%d?nonce=%lu";
+  char *base_url = "https://dc7.getfrogs.xyz/cyberfrog/";
+  char *format_specifier = "%s?cfsig=%s%d&cfnonce=%lu";
   size_t required_length = snprintf(NULL, 0, format_specifier, base_url,
                                     hex_signature, recovery_bit, nonce);
 
