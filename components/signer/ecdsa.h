@@ -8,16 +8,21 @@
 
 #define ECPARAMS MBEDTLS_ECP_DP_SECP256K1
 
+typedef struct {
+    char *signature;
+    int recovery_id;
+} SignatureResult;
+
 int ecdsa_init(mbedtls_ecdsa_context *ctx, mbedtls_ctr_drbg_context *ctr_drbg,
                mbedtls_entropy_context *entropy);
 
 char *generate_ecdsa_key(mbedtls_ecdsa_context *ctx,
                          mbedtls_ctr_drbg_context *ctr_drbg);
 
-char *ecdsa_sign_raw(mbedtls_ecdsa_context *ctx,
+SignatureResult ecdsa_sign_raw(mbedtls_ecdsa_context *ctx,
                      mbedtls_ctr_drbg_context *ctr_drbg,
-                     const unsigned char *message, size_t message_len,
-                     int recovery_id);
+                     const unsigned char *message, size_t message_len
+                     );
 
 int ecdsa_verify_signature(mbedtls_ecdsa_context *ctx,
                            const unsigned char *message, size_t message_len,

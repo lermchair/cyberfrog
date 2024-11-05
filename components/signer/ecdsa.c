@@ -122,11 +122,13 @@ cleanup:
   return pubkey;
 }
 
-char *ecdsa_sign_raw(mbedtls_ecdsa_context *ctx,
-                     mbedtls_ctr_drbg_context *ctr_drbg,
-                     const unsigned char *message, size_t message_len,
-                     int recovery_id) {
+SignatureResult ecdsa_sign_raw(mbedtls_ecdsa_context *ctx,
+                               mbedtls_ctr_drbg_context *ctr_drbg,
+                               const unsigned char *message,
+                               size_t message_len) {
   int ret;
+  int recovery_id = 0;
+  SignatureResult result = {NULL, 0};
   size_t hash_len = 32;
   unsigned char padded_message[32] = {0}; // Initialize with zeros
   unsigned char hash[hash_len];
@@ -138,7 +140,7 @@ char *ecdsa_sign_raw(mbedtls_ecdsa_context *ctx,
 
   if (message_len > 32) {
     printf("Error: Message length exceeds 32 bytes\n");
-    return NULL;
+    return result;
   }
   memcpy(padded_message, message, message_len);
 
@@ -146,7 +148,7 @@ char *ecdsa_sign_raw(mbedtls_ecdsa_context *ctx,
 
   if ((ret = mbedtls_sha256(padded_message, hash_len, hash, 0)) != 0) {
     printf(" failed\n  ! mbedtls_sha256 returned %d\n", ret);
-    return NULL;
+    return result;
   }
 
   printf("Message hash: %s\n", binary_to_hex(hash, hash_len));
@@ -272,7 +274,7 @@ char *ecdsa_sign_raw(mbedtls_ecdsa_context *ctx,
     char error_buf[100];
     mbedtls_strerror(ret, error_buf, sizeof(error_buf));
     printf("Signature verification failed: %s\n", error_buf);
-    return NULL;
+    return result;
   } else {
     printf("Signature verified successfully\n");
   }
@@ -289,5 +291,7 @@ cleanup:
   mbedtls_mpi_free(&tmp);
   mbedtls_ecp_point_free(&R);
 
-  return hex_sig;
+  result.signature = hex_sig;
+  result.recovery_id = recovery_id;
+  return result;
 }

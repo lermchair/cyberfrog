@@ -128,18 +128,19 @@ void nfc_task() {
 
       unsigned char message[sizeof(uint32_t)];
       uint32_to_char(nonce, message);
-      int recovery_bit = 0;
-      char *hex_sig = ecdsa_sign_raw(&key, &ctr_drbg, message, sizeof(message),
-                                     recovery_bit);
-      if (hex_sig == NULL) {
-        printf("Failed to sign message\n");
-        return;
+
+      SignatureResult sig_result = ecdsa_sign_raw(&key, &ctr_drbg, message, sizeof(message));
+      if (sig_result.signature == NULL) {
+          printf("Failed to sign message\n");
+          return;
       }
+      printf("New recovery bit: %d\n", sig_result.recovery_id);
 
       st25dv_ndef_write_ccfile(CC_FILE_DATA);
       vTaskDelay(pdMS_TO_TICKS(100));
 
-      char *url = format_url_safely(hex_sig, recovery_bit, nonce);
+      char *url = format_url_safely(sig_result.signature, sig_result.recovery_id, nonce);
+      printf("URL: %s\n", url);
       printf("URL: %s\n", url);
       char record_type[] = "U";
 
@@ -165,6 +166,7 @@ void nfc_task() {
         printf("Couldn't construct url_record\n");
         return;
       }
+      free(sig_result.signature);
 
       err = st25dv_ndef_write_content(ST25DV_CONF, &address, true, true,
                                       url_record);
