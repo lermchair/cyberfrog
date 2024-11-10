@@ -13,7 +13,7 @@
 #define BUZ_PIN 5
 #define BUTTON_PIN 2
 
-#define NFC_DEBOUNCE_TIME_US 1500000 // 1.5s debounce time
+#define NFC_DEBOUNCE_TIME_US 1000000 // 1s debounce time
 #define CC_FILE_ADDR 0x0000
 #define CC_FILE_DATA 0x00040000010040E2
 #define ARRAY_SIZE(x) (sizeof(x) / sizeof(x[0]))
