@@ -272,7 +272,7 @@ void app_main(void) {
             st25dv_ndef_record url_record = {0};
 
             unsigned char message[sizeof(uint32_t)];
-            uint32_to_char(nonce, message);
+            uint32_to_char(new_nonce, message);
 
             SignatureResult sig_result = ecdsa_sign_raw(&key, &ctr_drbg, message, sizeof(message));
             if (sig_result.signature == NULL) {
